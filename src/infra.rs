@@ -42,6 +42,7 @@ pub mod test {
     });
 
     pub async fn setup_test_sqlite<T: Into<String>>(dir: T) -> &'static Pool<Any> {
+        sqlx::any::install_default_drivers();
         SQLITE_INIT
             .get_or_init(|| async {
                 _setup_sqlite_internal(dir)
@@ -62,6 +63,7 @@ pub mod test {
     }
 
     pub async fn setup_test_mysql<T: Into<String>>(dir: T) -> &'static Pool<Any> {
+        sqlx::any::install_default_drivers();
         MYSQL_INIT
             .get_or_init(|| async {
                 let pool = crate::infra::rdb::new_rdb_pool(&MYSQL_CONFIG, None)
