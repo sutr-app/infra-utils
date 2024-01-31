@@ -1,4 +1,4 @@
-use std::{path::Path, time::Duration};
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use debug_stub_derive::DebugStub;
@@ -6,10 +6,8 @@ use futures::StreamExt;
 use log::LevelFilter;
 use serde::Deserialize;
 use sqlx::{
-    any::AnyPoolOptions,
+    any::{AnyConnectOptions, AnyPoolOptions},
     migrate::MigrateDatabase,
-    mysql::MySqlConnectOptions,
-    sqlite::{SqliteAutoVacuum, SqliteConnectOptions},
     Any, ConnectOptions, Pool,
 };
 
@@ -79,16 +77,20 @@ pub async fn new_sqlite_pool(
     if !sqlx::Sqlite::database_exists(&config.sqlite_url()).await? {
         sqlx::Sqlite::create_database(&config.sqlite_url()).await?;
     }
-    // TODO config
-    let mut options = SqliteConnectOptions::new()
-        .auto_vacuum(SqliteAutoVacuum::Incremental)
-        .filename(Path::new(&config.dbname));
-    options.log_statements(LevelFilter::Debug);
-    options.log_slow_statements(LevelFilter::Warn, Duration::from_secs(1));
+    // from sqlx 0.7, auto_vacuum is not supported
+    // ref. https://github.com/launchbadge/sqlx/issues/2773
+    //
+    // let mut options = SqliteConnectOptions::new()
+    //     .auto_vacuum(SqliteAutoVacuum::Incremental)
+    //     .filename(Path::new(&config.dbname));
+    let options = AnyConnectOptions::from_url(&url::Url::parse(&config.sqlite_url())?)?
+        .log_statements(LevelFilter::Debug)
+        .log_slow_statements(LevelFilter::Warn, Duration::from_secs(1));
+
     let pr = AnyPoolOptions::new()
         .max_connections(config.max_connections)
         //.min_connections(3)
-        .connect_with(options.into())
+        .connect_with(options)
         .await
         .context(format!(
             "cannot initialize sql connection. url:{:?}",
@@ -119,17 +121,22 @@ async fn setup_sqlite(p: &Pool<Any>, init_schema: Option<&String>) -> Result<()>
 }
 
 pub async fn new_mysql_pool(config: &RDBConfig) -> Result<Pool<Any>> {
-    let port = config.port.parse::<u16>()?;
-    let mut options = MySqlConnectOptions::new()
-        .host(&config.host)
-        .port(port)
-        .username(&config.user)
-        .password(&config.password)
-        .database(&config.dbname)
-        .charset("utf8mb4")
-        .statement_cache_capacity(2048); // TODO setting
-    options.log_statements(LevelFilter::Debug);
-    options.log_slow_statements(LevelFilter::Warn, Duration::from_secs(1));
+    // let port = config.port.parse::<u16>()?;
+    // from sqlx 0.7, mysql connection options not used (statement_cache_capacity)
+    // ref. https://github.com/launchbadge/sqlx/issues/2773
+    //
+    // let mut options = MySqlConnectOptions::new()
+    //     .host(&config.host)
+    //     .port(port)
+    //     .username(&config.user)
+    //     .password(&config.password)
+    //     .database(&config.dbname)
+    //     .charset("utf8mb4")
+    //     .statement_cache_capacity(2048); // TODO setting
+
+    let options = AnyConnectOptions::from_url(&url::Url::parse(&config.mysql_url())?)?
+        .log_statements(LevelFilter::Debug)
+        .log_slow_statements(LevelFilter::Warn, Duration::from_secs(1));
 
     // TODO set from config
     AnyPoolOptions::new()
@@ -139,7 +146,7 @@ pub async fn new_mysql_pool(config: &RDBConfig) -> Result<Pool<Any>> {
         .test_before_acquire(true)
         .max_connections(config.max_connections)
         .min_connections(config.max_connections / 10 + 1)
-        .connect_with(options.into())
+        .connect_with(options)
         // .connect(&config.mysql_url())
         .await
         .context(format!(
