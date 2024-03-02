@@ -73,14 +73,13 @@ pub mod test {
                     .run(&pool)
                     .await
                     .unwrap();
-                // sqlx::migrate!(dir.into()).run(&pool).await.unwrap();
                 pool
             })
             .await
     }
 
     pub static REDIS_CONFIG: Lazy<RedisConfig> = Lazy::new(|| {
-        let url = std::env::var("TEST_REDIS_HOST")
+        let url = std::env::var("TEST_REDIS_URL")
             .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
         RedisConfig {
             username: None,
