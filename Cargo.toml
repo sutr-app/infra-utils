@@ -19,7 +19,7 @@ envy = "0.4"
 futures = "0.3"
 log = "0.4"
 once_cell = "1.19"
-opentelemetry = { version = "0.21", features = ["metrics", "trace"] }
+opentelemetry = { version = "0.22", features = ["metrics", "trace"] }
 redis = { version = "0.24", features = [
     "tokio-rustls-comp",
     "r2d2",
