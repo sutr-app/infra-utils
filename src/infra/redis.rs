@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use deadpool_redis::redis::AsyncCommands as PoolAsyncCommands;
 use deadpool_redis::{Config, Connection, Pool, Runtime};
 use debug_stub_derive::DebugStub;
-use redis::aio::Connection as RedisConnection;
+use redis::aio::MultiplexedConnection as RedisConnection;
 use redis::aio::PubSub;
 use redis::Client;
 use serde::Deserialize;
@@ -31,27 +31,22 @@ pub trait UseRedisClient {
     fn redis_client(&self) -> &RedisClient;
 
     async fn subscribe(&self, channel: &str) -> Result<PubSub> {
-        let mut pubsub = self
-            .redis_client()
-            .get_async_connection()
-            .await?
-            .into_pubsub();
+        let mut pubsub = self.redis_client().get_async_pubsub().await?;
         pubsub.subscribe(channel).await?;
         Ok(pubsub)
     }
 
     async fn psubscribe(&self, pchannel: &String) -> Result<PubSub> {
-        let mut pubsub = self
-            .redis_client()
-            .get_async_connection()
-            .await?
-            .into_pubsub();
+        let mut pubsub = self.redis_client().get_async_pubsub().await?;
         pubsub.psubscribe(pchannel).await?;
         Ok(pubsub)
     }
 
     async fn publish(&self, channel: &str, message: &Vec<u8>) -> Result<()> {
-        let mut conn = self.redis_client().get_async_connection().await?;
+        let mut conn = self
+            .redis_client()
+            .get_multiplexed_async_connection()
+            .await?;
         conn.publish(channel, message).await?;
         Ok(())
     }
@@ -84,7 +79,7 @@ pub async fn new_redis_connection(config: RedisConfig) -> Result<RedisConnection
 
     let client = Client::open(config.url)?;
     client
-        .get_async_connection()
+        .get_multiplexed_async_connection()
         .await
         .map_err(|e| anyhow!("redis init error: {:?}", e))
 }
@@ -136,7 +131,7 @@ pub trait UseRedisLock: UseRedisPool {
             .arg("NX")
             .arg("EX")
             .arg(expire_sec)
-            .query_async::<redis::aio::Connection, String>(con.as_mut())
+            .query_async::<redis::aio::MultiplexedConnection, String>(con.as_mut())
             .await
         {
             Ok(lock) => {
@@ -182,8 +177,9 @@ pub trait UseRedisLock: UseRedisPool {
 #[cfg(feature = "redis-test")]
 #[cfg(test)]
 mod test {
-    use crate::infra::redis::{
-        new_redis_connection, new_redis_pool, RedisConfig, UseRedisLock, UseRedisPool,
+    use crate::infra::{
+        redis::{new_redis_connection, new_redis_pool, UseRedisLock, UseRedisPool},
+        test::REDIS_CONFIG,
     };
     use anyhow::Result;
     use deadpool_redis::redis::AsyncCommands as PoolAsyncCommands;
@@ -255,15 +251,7 @@ mod test {
                 &self.pool
             }
         }
-        let config = RedisConfig {
-            username: None,
-            password: None,
-            url: "redis://127.0.0.1:6379".to_string(),
-            pool_create_timeout_msec: None,
-            pool_wait_timeout_msec: None,
-            pool_recycle_timeout_msec: None,
-            pool_size: 5,
-        };
+        let config = REDIS_CONFIG.clone();
         let p = new_redis_pool(config).await.unwrap();
         let client = RedisPool { pool: p };
         let th_p = client.clone();
