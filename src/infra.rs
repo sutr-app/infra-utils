@@ -14,35 +14,44 @@ pub mod test {
     use anyhow::Result;
     use once_cell::sync::Lazy;
     use sqlx::{migrate::Migrator, Any, Pool};
-    use tokio::sync::OnceCell;
+    use tokio::{runtime::Runtime, sync::OnceCell};
 
+    // destroy runtime, destroy connection pool, so use as static in all test
+    // ref. https://qiita.com/autotaker1984/items/d0ae2d7feb148ffb8989
+    pub static TEST_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    });
     // migrate once in initialization
     static MYSQL_INIT: OnceCell<Pool<Any>> = OnceCell::const_new();
     static SQLITE_INIT: OnceCell<Pool<Any>> = OnceCell::const_new();
 
-    pub static SQLITE_CONFIG: Lazy<RDBConfig> = Lazy::new(|| RDBConfig {
-        host: "".to_string(),
-        port: "".to_string(),
-        user: "".to_string(),
-        password: "".to_string(),
-        dbname: "./test_db.sqlite3".to_string(),
-        max_connections: 20,
+    pub static SQLITE_CONFIG: Lazy<RDBConfig> = Lazy::new(|| {
+        RDBConfig::new(
+            "".to_string(),
+            "".to_string(),
+            "".to_string(),
+            "".to_string(),
+            "./test_db.sqlite3".to_string(),
+            20,
+        )
     });
 
     pub static MYSQL_CONFIG: Lazy<RDBConfig> = Lazy::new(|| {
         let host = std::env::var("TEST_MYSQL_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-        RDBConfig {
+        RDBConfig::new(
             host,
-            port: "3306".to_string(),
-            user: "mysql".to_string(),
-            password: "mysql".to_string(),
-            dbname: "test".to_string(),
-            max_connections: 20,
-        }
+            "3306".to_string(),
+            "mysql".to_string(),
+            "mysql".to_string(),
+            "test".to_string(),
+            20,
+        )
     });
 
     pub async fn setup_test_sqlite<T: Into<String>>(dir: T) -> &'static Pool<Any> {
-        sqlx::any::install_default_drivers();
         SQLITE_INIT
             .get_or_init(|| async {
                 _setup_sqlite_internal(dir)
@@ -63,7 +72,6 @@ pub mod test {
     }
 
     pub async fn setup_test_mysql<T: Into<String>>(dir: T) -> &'static Pool<Any> {
-        sqlx::any::install_default_drivers();
         MYSQL_INIT
             .get_or_init(|| async {
                 let pool = crate::infra::rdb::new_rdb_pool(&MYSQL_CONFIG, None)

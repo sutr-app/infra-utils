@@ -12,7 +12,7 @@ anyhow = "1.0"
 async-trait = "0.1"
 chrono = "0.4"
 command-utils = { git = "https://github.com/sutr-app/command-utils.git", tag = "v0.1.0" }
-deadpool = { version = "0.11", features = ["rt_tokio_1"] }
+deadpool = { version = "0.12", features = ["rt_tokio_1"] }
 deadpool-redis = { version = "0.15", features = ["rt_tokio_1", "cluster"] }
 debug_stub_derive = "0.3"
 envy = "0.4"
@@ -28,12 +28,12 @@ redis = { version = "0.25", features = [
 ] }
 serde = "1.0"
 serde_json = "1.0"
-sqlx = { version = "0.7", features = [
-    "runtime-tokio-rustls",
+sqlx = { git = "https://github.com/sutr-app/sqlx.git", branch = "fix-any", features = [ # tag = "v0.7.4",
+    "runtime-tokio",
+    "tls-rustls",
     "any",
     "sqlite",
     "mysql",
-    "macros",
     "chrono",
 ] }
 stretto = { version = "0.8", features = ["async"] }
@@ -51,7 +51,7 @@ url = "2"
 unicode-normalization = "0.1"
 
 [dev-dependencies]
-itertools = "0.12"
+itertools = "0.13"
 
 [features]
 default = []
