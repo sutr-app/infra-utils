@@ -138,7 +138,7 @@ fn url_test() {
     assert_eq!(conf.rdb_url(), "sqlite://db")
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub enum RdbConfig {
     Separate(RdbConfigImpl),
     Url(RdbUrlConfigImpl),

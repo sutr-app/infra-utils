@@ -268,6 +268,7 @@ pub trait WebScraper: UseWebDriver + Send + Sync {
     //     }
     //     .flatten()
     // }
+    #[allow(clippy::too_many_arguments)]
     async fn scraping(
         &self,
         url: impl Into<String> + Send,
