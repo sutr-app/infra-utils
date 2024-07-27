@@ -62,15 +62,19 @@ pub mod test {
                     .run(&pool)
                     .await
                     .unwrap();
-                truncate_tables(&pool).await;
                 pool
             })
             .await
     }
 
     #[cfg(feature = "mysql")]
-    pub async fn truncate_tables(pool: &RdbPool) {
-        sqlx::raw_sql("TRUNCATE TABLE job; TRUNCATE TABLE worker; TRUNCATE TABLE job_result;")
+    pub async fn truncate_tables(pool: &RdbPool, tables: Vec<&str>) {
+        let sql = tables
+            .iter()
+            .map(|t| format!("TRUNCATE TABLE {};", t))
+            .collect::<Vec<String>>()
+            .join(" ");
+        sqlx::raw_sql(sql.as_str())
             .execute(pool)
             .await
             .expect("truncate all tables");
@@ -112,16 +116,20 @@ pub mod test {
             .await?
             .run(&pool)
             .await?;
-        truncate_tables(&pool).await;
         Ok(pool)
     }
 
     #[cfg(not(feature = "mysql"))]
-    pub async fn truncate_tables(pool: &RdbPool) {
-        sqlx::raw_sql("DELETE FROM job; DELETE FROM worker; DELETE FROM job_result; DELETE FROM SQLITE_SEQUENCE WHERE name='job' OR name='worker' OR name='job_result';")
+    pub async fn truncate_tables(pool: &RdbPool, tables: Vec<&str>) {
+        let sql = tables
+            .iter()
+            .map(|t| format!("DELETE FROM {};", t))
+            .collect::<Vec<String>>()
+            .join(" ");
+        sqlx::raw_sql(sql.as_str())
             .execute(pool)
             .await
-            .expect("delete all tables");
+            .unwrap_or_else(|_| panic!("delete tables: {}", tables.join(",")));
     }
 
     pub static REDIS_CONFIG: Lazy<RedisConfig> = Lazy::new(|| {
