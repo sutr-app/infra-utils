@@ -1,10 +1,10 @@
 use anyhow::{anyhow, Result};
+use command_utils::util::encoding;
 use readability::extractor::Product;
 use reqwest::{self, StatusCode};
 use robotstxt::DefaultMatcher;
 use std::{borrow::BorrowMut, io::Cursor, time::Duration};
 use url::Url;
-use command_utils::util::encoding;
 
 fn robots_txt_url(url_str: &str) -> Result<Url> {
     let mut url = Url::parse(url_str)?;
