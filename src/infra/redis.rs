@@ -42,13 +42,13 @@ pub trait UseRedisClient {
         Ok(pubsub)
     }
 
-    async fn publish(&self, channel: &str, message: &Vec<u8>) -> Result<()> {
+    async fn publish(&self, channel: &str, message: &Vec<u8>) -> Result<bool> {
         let mut conn = self
             .redis_client()
             .get_multiplexed_async_connection()
             .await?;
         conn.publish(channel, message).await?;
-        Ok(())
+        Ok(true)
     }
 }
 
