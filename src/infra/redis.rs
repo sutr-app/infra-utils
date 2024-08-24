@@ -131,7 +131,7 @@ pub trait UseRedisLock: UseRedisPool {
             .arg("NX")
             .arg("EX")
             .arg(expire_sec)
-            .query_async::<redis::aio::MultiplexedConnection, String>(con.as_mut())
+            .query_async(con.as_mut())
             .await
         {
             Ok(lock) => {

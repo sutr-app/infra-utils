@@ -136,7 +136,7 @@ pub trait UseRedisClusterLock: UseRedisClusterPool {
             .arg("NX")
             .arg("EX")
             .arg(expire_sec)
-            .query_async::<_, String>(con.as_mut())
+            .query_async(con.as_mut())
             .await
         {
             Ok(lock) => {
@@ -193,6 +193,7 @@ mod test {
     #[tokio::test]
     async fn single_test() {
         use serde::{Deserialize, Serialize};
+        let host = std::env::var("TEST_REDIS_CLUSTER_HOST").unwrap_or("127.0.0.1".to_string());
 
         #[derive(Debug, Serialize, Deserialize, PartialEq)]
         struct User {
@@ -204,12 +205,12 @@ mod test {
             username: None,
             password: None,
             urls: vec![
-                "redis://127.0.0.1:7000".to_string(),
-                "redis://127.0.0.1:7001".to_string(),
-                "redis://127.0.0.1:7002".to_string(),
-                "redis://127.0.0.1:7003".to_string(),
-                "redis://127.0.0.1:7004".to_string(),
-                "redis://127.0.0.1:7005".to_string(),
+                format!("redis://{}:7000", host),
+                format!("redis://{}:7001", host),
+                format!("redis://{}:7002", host),
+                format!("redis://{}:7003", host),
+                format!("redis://{}:7004", host),
+                format!("redis://{}:7005", host),
             ],
             pool_create_timeout_msec: None,
             pool_wait_timeout_msec: None,
@@ -258,6 +259,7 @@ mod test {
     #[tokio::test]
     async fn pool_test() -> Result<()> {
         // use std::time::Duration;
+        let host = std::env::var("TEST_REDIS_CLUSTER_HOST").unwrap_or("127.0.0.1".to_string());
 
         // tracing_subscriber::fmt()
         //     .with_max_level(tracing::Level::DEBUG)
@@ -276,12 +278,12 @@ mod test {
             username: None,
             password: None,
             urls: vec![
-                "redis://127.0.0.1:7000".to_string(),
-                "redis://127.0.0.1:7001".to_string(),
-                "redis://127.0.0.1:7002".to_string(),
-                "redis://127.0.0.1:7003".to_string(),
-                "redis://127.0.0.1:7004".to_string(),
-                "redis://127.0.0.1:7005".to_string(),
+                format!("redis://{}:7000", host),
+                format!("redis://{}:7001", host),
+                format!("redis://{}:7002", host),
+                format!("redis://{}:7003", host),
+                format!("redis://{}:7004", host),
+                format!("redis://{}:7005", host),
             ],
             pool_create_timeout_msec: None,
             pool_wait_timeout_msec: None,
@@ -375,17 +377,18 @@ mod test {
             }
         }
         impl super::UseRedisClusterLock for RedisClusterPool {}
+        let host = std::env::var("TEST_REDIS_CLUSTER_HOST").unwrap_or("127.0.0.1".to_string());
 
         let config = super::RedisClusterConfig {
             username: None,
             password: None,
             urls: vec![
-                "redis://127.0.0.1:7000".to_string(),
-                "redis://127.0.0.1:7001".to_string(),
-                "redis://127.0.0.1:7002".to_string(),
-                "redis://127.0.0.1:7003".to_string(),
-                "redis://127.0.0.1:7004".to_string(),
-                "redis://127.0.0.1:7005".to_string(),
+                format!("redis://{}:7000", host),
+                format!("redis://{}:7001", host),
+                format!("redis://{}:7002", host),
+                format!("redis://{}:7003", host),
+                format!("redis://{}:7004", host),
+                format!("redis://{}:7005", host),
             ],
             pool_create_timeout_msec: None,
             pool_wait_timeout_msec: None,
