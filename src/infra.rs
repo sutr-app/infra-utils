@@ -2,6 +2,7 @@ pub mod chan;
 pub mod lock;
 pub mod memory;
 pub mod net;
+pub mod protobuf;
 pub mod rdb;
 pub mod redis;
 pub mod redis_cluster;
