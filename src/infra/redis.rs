@@ -26,29 +26,41 @@ pub struct RedisConfig {
 pub type RedisPool = Pool;
 pub type RedisClient = redis::Client;
 
-#[async_trait]
-pub trait UseRedisClient {
+pub trait UseRedisClient: Send + Sync {
     fn redis_client(&self) -> &RedisClient;
 
-    async fn subscribe(&self, channel: &str) -> Result<PubSub> {
-        let mut pubsub = self.redis_client().get_async_pubsub().await?;
-        pubsub.subscribe(channel).await?;
-        Ok(pubsub)
+    fn subscribe(&self, channel: &str) -> impl std::future::Future<Output = Result<PubSub>> + Send {
+        async move {
+            let mut pubsub = self.redis_client().get_async_pubsub().await?;
+            pubsub.subscribe(channel).await?;
+            Ok(pubsub)
+        }
     }
 
-    async fn psubscribe(&self, pchannel: &String) -> Result<PubSub> {
-        let mut pubsub = self.redis_client().get_async_pubsub().await?;
-        pubsub.psubscribe(pchannel).await?;
-        Ok(pubsub)
+    fn psubscribe(
+        &self,
+        pchannel: &String,
+    ) -> impl std::future::Future<Output = Result<PubSub>> + Send {
+        async move {
+            let mut pubsub = self.redis_client().get_async_pubsub().await?;
+            pubsub.psubscribe(pchannel).await?;
+            Ok(pubsub)
+        }
     }
 
-    async fn publish(&self, channel: &str, message: &Vec<u8>) -> Result<bool> {
-        let mut conn = self
-            .redis_client()
-            .get_multiplexed_async_connection()
-            .await?;
-        conn.publish(channel, message).await?;
-        Ok(true)
+    fn publish(
+        &self,
+        channel: &str,
+        message: &Vec<u8>,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send {
+        async move {
+            let mut conn = self
+                .redis_client()
+                .get_multiplexed_async_connection()
+                .await?;
+            conn.publish::<&str, &Vec<u8>, ()>(channel, message).await?;
+            Ok(true)
+        }
     }
 }
 
@@ -70,7 +82,7 @@ pub trait UseRedisPool {
 }
 
 // for normal use (single connection)
-pub fn new_redis_client(config: RedisConfig) -> Result<redis::Client> {
+pub fn new_redis_client(config: RedisConfig) -> Result<RedisClient> {
     tracing::info!("Connecting to {:?}", config.url);
     Client::open(config.url).map_err(|e| e.into())
 }
@@ -119,43 +131,53 @@ pub async fn new_redis_pool(config: RedisConfig) -> Result<RedisPool> {
         })
 }
 
-#[async_trait]
-pub trait UseRedisLock: UseRedisPool {
-    async fn lock(&self, key: impl Into<String> + Send + Sync, expire_sec: i32) -> Result<()> {
-        let mut con = self.redis_pool().get().await?;
-        // use redis set cmd with nx and ex option to lock
-        let k = key.into();
-        match redis::cmd("SET")
-            .arg(&k)
-            .arg(Self::lock_value())
-            .arg("NX")
-            .arg("EX")
-            .arg(expire_sec)
-            .query_async(con.as_mut())
-            .await
-        {
-            Ok(lock) => {
-                if Self::is_ok(lock) {
-                    Ok(())
-                } else {
-                    // TODO log
-                    tracing::debug!("failed to lock:{:?}", &k);
-                    Err(anyhow!("failed to lock:{:?}", &k))
+pub trait UseRedisLock: UseRedisPool + Send + Sync {
+    fn lock(
+        &self,
+        key: impl Into<String> + Send + Sync,
+        expire_sec: i32,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
+        async move {
+            let mut con = self.redis_pool().get().await?;
+            // use redis set cmd with nx and ex option to lock
+            let k = key.into();
+            match redis::cmd("SET")
+                .arg(&k)
+                .arg(Self::lock_value())
+                .arg("NX")
+                .arg("EX")
+                .arg(expire_sec)
+                .query_async(&mut con)
+                .await
+            {
+                Ok(lock) => {
+                    if Self::is_ok(lock) {
+                        Ok(())
+                    } else {
+                        // TODO log
+                        tracing::debug!("failed to lock:{:?}", &k);
+                        Err(anyhow!("failed to lock:{:?}", &k))
+                    }
                 }
-            }
-            Err(e) => {
-                // unlock if error? (comment out for pesimistic lock but may make process slow (locked until expire time, so set expiretime not too long))
-                // let _ = self.unlock(key).await;
-                Err(e.into())
+                Err(e) => {
+                    // unlock if error? (comment out for pesimistic lock but may make process slow (locked until expire time, so set expiretime not too long))
+                    // let _ = self.unlock(key).await;
+                    Err(e.into())
+                }
             }
         }
     }
 
-    async fn unlock(&self, key: impl Into<String> + Send + Sync) -> Result<()> {
-        let mut redis = self.redis_pool().get().await?;
-        let k = key.into();
-        redis.del(k).await?;
-        Ok(())
+    fn unlock(
+        &self,
+        key: impl Into<String> + Send + Sync,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
+        async {
+            let mut redis = self.redis_pool().get().await?;
+            let k = key.into();
+            redis.del::<String, ()>(k).await?;
+            Ok(())
+        }
     }
 
     #[inline]

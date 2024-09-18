@@ -53,6 +53,7 @@ pub trait ProtobufDescriptorLoader {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct ProtobufDescriptor {
     pool: DescriptorPool,
 }
@@ -84,6 +85,7 @@ impl ProtobufDescriptor {
         let dynamic_message = DynamicMessage::decode(message_descriptor, cursor)?;
         Ok(dynamic_message)
     }
+    #[allow(dead_code)]
     fn decode_from_json<T: ReflectMessage + Default>(json: impl AsRef<str>) -> Result<T> {
         let descriptor = T::default().descriptor();
         let mut deserializer = serde_json::Deserializer::from_str(json.as_ref());
@@ -103,20 +105,14 @@ mod tests {
     use anyhow::Result;
     use itertools::Itertools;
     use prost::Message;
-    use prost_reflect::{DescriptorPool, ReflectMessage};
-    use serde::Serialize;
-    use std::{
-        borrow::BorrowMut,
-        io::{Cursor, Read},
-        path::PathBuf,
-    };
-    use tonic::IntoRequest;
+    use prost_reflect::ReflectMessage;
+    use std::io::Cursor;
+
     struct ProtobufDescriptorImpl {}
     impl ProtobufDescriptorLoader for ProtobufDescriptorImpl {}
 
     #[test]
     fn test_load_protobuf_descriptor() -> Result<()> {
-        // let descriptor = ProtobufDescriptorImpl {};
         let proto_string = r#"
         syntax = "proto3";
 
@@ -134,16 +130,16 @@ mod tests {
             "messages:{:?}",
             descriptor_pool.all_messages().collect_vec()
         );
-        assert_eq!(
-            descriptor_pool.all_messages().collect_vec().is_empty(),
-            false
-        );
+        assert!(!descriptor_pool.all_messages().collect_vec().is_empty());
         let job_descriptor = descriptor_pool
             .get_message_by_name("jobworkerp.data.Job")
             .unwrap();
         job_descriptor
             .fields()
             .for_each(|field| println!("field:{:?}", field));
+        assert_eq!(job_descriptor.full_name(), "jobworkerp.data.Job");
+        assert_eq!(job_descriptor.package_name(), "jobworkerp.data");
+        assert_eq!(job_descriptor.name(), "Job");
         Ok(())
     }
 
@@ -168,7 +164,7 @@ mod tests {
             "description": "test desc"
         }
         "#;
-        let message = descriptor.get_message_from_json("jobworkerp.data.Job", &json)?;
+        let message = descriptor.get_message_from_json("jobworkerp.data.Job", json)?;
 
         assert_eq!(message.descriptor().name(), "Job");
         assert_eq!(
@@ -188,7 +184,7 @@ mod tests {
             "test desc"
         );
         let bytes = message.encode_to_vec();
-        let mut cursor = Cursor::new(bytes);
+        let cursor = Cursor::new(bytes);
         let mes = DynamicMessage::decode(
             descriptor
                 .get_message_by_name("jobworkerp.data.Job")

@@ -308,10 +308,7 @@ pub trait WebScraper: UseWebDriver + Send + Sync {
         let contents = self
             .scrape_content(&content_selector, next_page_selector.as_ref())
             .await
-            .map_err(|e| {
-                tracing::warn!("error in scraping contents: {:?}", &e);
-                e
-            })?;
+            .inspect_err(|e| tracing::warn!("error in scraping contents: {:?}", &e))?;
         if contents.is_empty() {
             Err(WebDriverError::ParseError(format!(
                 "content not found: {}",
@@ -333,10 +330,11 @@ pub trait WebScraper: UseWebDriver + Send + Sync {
         tracing::info!("datetime res: {:?}", &datetime);
 
         let tags = if let Some(tsel) = tags_selector {
-            let tag_elems = self.driver().find_all(tsel).await.map_err(|e| {
-                tracing::warn!("error in scraping tags: {:?}", &e);
-                e
-            })?;
+            let tag_elems = self
+                .driver()
+                .find_all(tsel)
+                .await
+                .inspect_err(|e| tracing::warn!("error in scraping tags: {:?}", &e))?;
             future::join_all(
                 tag_elems
                     .iter()
@@ -377,10 +375,11 @@ pub trait WebScraper: UseWebDriver + Send + Sync {
         datetime_attribute: &Option<String>,
         datetime_regex: &Option<String>,
     ) -> Result<Option<DateTime<FixedOffset>>, anyhow::Error> {
-        let datetime_element = self.driver().find(datetime_selector).await.map_err(|e| {
-            tracing::warn!("error in scraping datetime: {:?}", &e);
-            e
-        })?;
+        let datetime_element = self
+            .driver()
+            .find(datetime_selector)
+            .await
+            .inspect_err(|e| tracing::warn!("error in scraping datetime: {:?}", &e))?;
         let dt_value = match datetime_attribute {
             Some(dta) => datetime_element.attr(dta).await?.unwrap_or_default(),
             None => datetime_element.text().await?,

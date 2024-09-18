@@ -44,6 +44,8 @@ where
     fn default_ttl(&self) -> Option<&Duration>;
 
     fn cache(&self) -> &AsyncCache<KEY, VAL>;
+
+    // lock for anti-stampede
     fn key_lock(&self) -> &RwLockWithKey<KEY>;
 
     #[inline]
@@ -196,6 +198,13 @@ where
     {
         self.cache().try_remove(key).await.map_err(|e| e.into())
     }
+    async fn delete_cache_locked(&self, key: &KEY) -> Result<()>
+    where
+        Self: Send + Sync,
+    {
+        let _lock = self.key_lock().write(key.clone()).await;
+        self.cache().try_remove(key).await.map_err(|e| e.into())
+    }
     async fn clear(&self) -> Result<()>
     where
         Self: Send + Sync,
@@ -205,7 +214,7 @@ where
     }
 }
 
-fn new_memory_cache<K: Hash + Eq + std::fmt::Debug + Send + Clone, V: Send + Sync + 'static>(
+pub fn new_memory_cache<K: Hash + Eq + std::fmt::Debug + Send + Clone, V: Send + Sync + 'static>(
     config: &MemoryCacheConfig,
 ) -> AsyncCache<K, V> {
     AsyncCache::<K, V>::builder(config.num_counters, config.max_cost)

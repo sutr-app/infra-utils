@@ -124,43 +124,53 @@ pub async fn new_redis_cluster_pool(conf: RedisClusterConfig) -> Result<RedisClu
     })
 }
 
-#[async_trait]
-pub trait UseRedisClusterLock: UseRedisClusterPool {
-    async fn lock(&self, key: impl Into<String> + Send + Sync, expire_sec: i32) -> Result<()> {
-        let mut con = self.redis_cluster_pool().get().await?;
-        // use redis_cluster set cmd with nx and ex option to lock
-        let k = key.into();
-        match cmd("SET")
-            .arg(&k)
-            .arg(Self::lock_value())
-            .arg("NX")
-            .arg("EX")
-            .arg(expire_sec)
-            .query_async(con.as_mut())
-            .await
-        {
-            Ok(lock) => {
-                if Self::is_ok(lock) {
-                    Ok(())
-                } else {
-                    // TODO log
-                    tracing::debug!("failed to lock:{:?}", &k);
-                    Err(anyhow!("failed to lock:{:?}", &k))
+pub trait UseRedisClusterLock: UseRedisClusterPool + Send + Sync {
+    fn lock(
+        &self,
+        key: impl Into<String> + Send + Sync,
+        expire_sec: i32,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
+        async move {
+            let mut con = self.redis_cluster_pool().get().await?;
+            // use redis_cluster set cmd with nx and ex option to lock
+            let k = key.into();
+            match cmd("SET")
+                .arg(&k)
+                .arg(Self::lock_value())
+                .arg("NX")
+                .arg("EX")
+                .arg(expire_sec)
+                .query_async(con.as_mut())
+                .await
+            {
+                Ok(lock) => {
+                    if Self::is_ok(lock) {
+                        Ok(())
+                    } else {
+                        // TODO log
+                        tracing::debug!("failed to lock:{:?}", &k);
+                        Err(anyhow!("failed to lock:{:?}", &k))
+                    }
                 }
-            }
-            Err(e) => {
-                // unlock if error? (comment out for pesimistic lock but may make process slow (locked until expire time, so set expiretime not too long))
-                // let _ = self.unlock(key).await;
-                Err(e.into())
+                Err(e) => {
+                    // unlock if error? (comment out for pesimistic lock but may make process slow (locked until expire time, so set expiretime not too long))
+                    // let _ = self.unlock(key).await;
+                    Err(e.into())
+                }
             }
         }
     }
 
-    async fn unlock(&self, key: impl Into<String> + Send + Sync) -> Result<()> {
-        let mut redis_cluster = self.redis_cluster_pool().get().await?;
-        let k = key.into();
-        redis_cluster.del(k).await?;
-        Ok(())
+    fn unlock(
+        &self,
+        key: impl Into<String> + Send + Sync,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
+        async {
+            let mut redis_cluster = self.redis_cluster_pool().get().await?;
+            let k = key.into();
+            redis_cluster.del::<String, ()>(k).await?;
+            Ok(())
+        }
     }
 
     #[inline]
