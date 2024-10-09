@@ -20,7 +20,7 @@ pub trait ProtobufDescriptorLoader {
             .protoc_arg("--experimental_allow_proto3_optional")
             .file_descriptor_set_path(&descriptor_file) // for reflection
             .type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]")
-            .compile(&[&tempfile], &[&tempdir])
+            .compile_protos(&[&tempfile], &[&tempdir])
             .context(format!("Failed to compile protos {:?}", &tempfile))?;
 
         let descriptor = Self::_load_protobuf_descriptor(&descriptor_file)?;

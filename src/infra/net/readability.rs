@@ -6,6 +6,8 @@ use robotstxt::DefaultMatcher;
 use std::{borrow::BorrowMut, io::Cursor, time::Duration};
 use url::Url;
 
+use super::webdriver::{UseWebDriver, WebDriverWrapper};
+
 fn robots_txt_url(url_str: &str) -> Result<Url> {
     let mut url = Url::parse(url_str)?;
     url.set_path("/robots.txt");
@@ -85,6 +87,37 @@ pub async fn scrape_to_utf8(
             .map_err(|e| anyhow!("readable extract error: {:?}", e))
     } else {
         Err(anyhow!("request not success: {:?}", res))
+    }
+}
+
+pub async fn scrape_by_webdriver(
+    webdriver: &WebDriverWrapper,
+    url: &str,
+    user_agent: Option<&String>,
+    check_robotstxt: bool,
+) -> Result<Product> {
+    if check_robotstxt {
+        let robotstxt = readable_by_robots_txt(url, user_agent).await?;
+        if !robotstxt.unwrap_or(true) {
+            Err(anyhow!("denied by robots.txt"))?
+        }
+    }
+    if let Err(err) = webdriver.driver().goto(url).await {
+        tracing::warn!("loading error: {:?}", err)
+    }
+    let status = webdriver.driver().status().await?;
+    // self.driver().screenshot(path::Path::new("./browser_screen.png")).await?;
+    let source = webdriver.driver().source().await?;
+    tracing::trace!("page source:{:?}", source);
+    if status.ready {
+        let url = Url::parse(url)?;
+        // add to encode to utf8 (all in buffer)
+        let mut res = encoding::encode_to_utf8_raw(source.as_bytes())?;
+        let mut c = unsafe { Cursor::new(res.as_bytes_mut()) };
+        readability::extractor::extract(&mut c, &url)
+            .map_err(|e| anyhow!("readable extract error: {:?}", e))
+    } else {
+        Err(anyhow!("request not success: {:?}", status.message))
     }
 }
 
