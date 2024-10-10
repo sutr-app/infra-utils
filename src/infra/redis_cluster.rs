@@ -38,6 +38,7 @@ impl From<RedisClusterConfig> for Config {
                 },
                 queue_mode: deadpool::managed::QueueMode::Fifo,
             }),
+            read_from_replicas: true,
         }
     }
 }
