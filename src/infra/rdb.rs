@@ -198,7 +198,7 @@ pub async fn new_rdb_pool(config: &RdbConfig, init_schema: Option<&String>) -> R
         Sqlite::create_database(&config.rdb_url()).await?;
     }
     let options = SqliteConnectOptions::from_url(&url::Url::parse(&config.rdb_url())?)?
-        .log_statements(LevelFilter::Debug)
+        .log_statements(LevelFilter::Trace)
         .log_slow_statements(LevelFilter::Warn, Duration::from_secs(1));
 
     let pr = SqlitePoolOptions::new()

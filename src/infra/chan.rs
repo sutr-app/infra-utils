@@ -64,6 +64,7 @@ impl<T: Send + Sync + Clone, C: ChanTrait<ChanBufferItem<T>>> ChanBuffer<T, C> {
         let k = name.into();
         self.chan_buf
             .with_cache_locked(&k, ttl, || async {
+                tracing::debug!("create new channel: {}", &k);
                 let ch = Arc::new(C::new(self.buf_size));
                 Ok(ch)
             })

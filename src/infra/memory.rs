@@ -105,7 +105,7 @@ where
         match self.find_cache(key).await {
             Some(r) => Ok(r),
             None => {
-                tracing::debug!(
+                tracing::trace!(
                     "memory cache not found: {:?}, create by not_found_case",
                     key
                 );
@@ -143,7 +143,7 @@ where
         match self.find_cache(key).await {
             Some(r) => Ok(r),
             None => {
-                tracing::debug!(
+                tracing::trace!(
                     "memory cache not found: {:?}, create by not_found_case",
                     key
                 );
@@ -174,7 +174,7 @@ where
         let _lock = self.key_lock().read(key.clone()).await;
         self.cache().get(key).await.map(|v| {
             let res = v.value().clone();
-            tracing::debug!("memory cache found: {:?}", key);
+            tracing::trace!("memory cache found: {:?}", key);
             v.release();
             res
         })
@@ -186,7 +186,7 @@ where
     {
         self.cache().get(key).await.map(|v| {
             let res = v.value().clone();
-            tracing::debug!("memory cache found: {:?}", key);
+            tracing::trace!("memory cache found: {:?}", key);
             v.release();
             res
         })
