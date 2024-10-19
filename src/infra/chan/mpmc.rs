@@ -113,7 +113,7 @@ mod tests {
         let data = b"test".to_vec();
         assert_eq!(test.chan_buf().count_chan_opt(key).await, None);
         test.chan_buf()
-            .send_to_chan(key, data.clone(), None, None)
+            .send_to_chan(key, data.clone(), None, None, false)
             .await
             .unwrap();
         assert_eq!(test.chan_buf().count_chan_opt(key).await, Some(1));
@@ -134,12 +134,12 @@ mod tests {
         let key = "test";
         let data = b"test".to_vec();
         test.chan_buf()
-            .send_to_chan(key, data.clone(), Some("test".to_string()), None)
+            .send_to_chan(key, data.clone(), Some("test".to_string()), None, false)
             .await
             .unwrap();
         let res = test
             .chan_buf()
-            .send_to_chan(key, data.clone(), Some("test".to_string()), None)
+            .send_to_chan(key, data.clone(), Some("test".to_string()), None, false)
             .await;
         assert!(res.is_err());
     }
@@ -164,7 +164,7 @@ mod tests {
         });
         sleep(Duration::from_secs(1)).await;
         test.chan_buf()
-            .send_to_chan(key, data.clone(), None, None)
+            .send_to_chan(key, data.clone(), None, None, false)
             .await
             .unwrap();
         handle.await.unwrap();
@@ -186,7 +186,7 @@ mod tests {
         });
         sleep(Duration::from_secs(2)).await;
         test.chan_buf()
-            .send_to_chan(key, data.clone(), None, None)
+            .send_to_chan(key, data.clone(), None, None, false)
             .await
             .unwrap();
         handle.await.unwrap();

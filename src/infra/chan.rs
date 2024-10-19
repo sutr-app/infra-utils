@@ -80,6 +80,7 @@ impl<T: Send + Sync + Clone, C: ChanTrait<ChanBufferItem<T>>> ChanBuffer<T, C> {
         data: T,
         uniq_key: Option<String>,
         ttl: Option<&Duration>,
+        only_if_exists: bool,
     ) -> Result<bool> {
         let nm = name.into();
         if let Some(ukey) = &uniq_key {
@@ -91,10 +92,18 @@ impl<T: Send + Sync + Clone, C: ChanTrait<ChanBufferItem<T>>> ChanBuffer<T, C> {
                 return Err(anyhow!("duplicate uniq_key: {}", ukey));
             }
         }
-        self.get_or_create_chan(nm, ttl)
-            .await?
-            .send_to_chan((uniq_key, data))
-            .await
+        if only_if_exists {
+            self.get_chan_if_exists(&nm)
+                .await
+                .ok_or(anyhow!("channel not found: {}", &nm))?
+                .send_to_chan((uniq_key, data))
+                .await
+        } else {
+            self.get_or_create_chan(nm, ttl)
+                .await?
+                .send_to_chan((uniq_key, data))
+                .await
+        }
     }
     /// receive data from channel
     /// # Arguments

@@ -149,7 +149,13 @@ mod test {
         assert_eq!(test.broadcast_chan_buf().count_chan_opt(key).await, None);
         let r = test
             .broadcast_chan_buf()
-            .send_to_chan(key, data.clone(), None, Some(&Duration::from_secs(3)))
+            .send_to_chan(
+                key,
+                data.clone(),
+                None,
+                Some(&Duration::from_secs(3)),
+                false,
+            )
             .await
             .unwrap();
         // no receiver
@@ -172,7 +178,7 @@ mod test {
         // wait for receiver
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         test.broadcast_chan_buf()
-            .send_to_chan(key, data.clone(), None, None)
+            .send_to_chan(key, data.clone(), None, None, false)
             .await
             .unwrap();
         // no receiver
