@@ -1,6 +1,5 @@
 use anyhow::anyhow;
 use anyhow::Result;
-use async_trait::async_trait;
 use deadpool_redis::redis::AsyncCommands as PoolAsyncCommands;
 use deadpool_redis::{Config, Connection, Pool, Runtime};
 use debug_stub_derive::DebugStub;
@@ -64,20 +63,20 @@ pub trait UseRedisClient: Send + Sync {
     }
 }
 
-#[async_trait]
 pub trait UseRedisConnection {
     fn redis_connection(&self) -> &RedisConnection;
 }
 
-#[async_trait]
-pub trait UseRedisPool {
+pub trait UseRedisPool: Send + Sync {
     fn redis_pool(&self) -> &Pool;
 
-    async fn connection(&self) -> Result<Connection> {
-        self.redis_pool()
-            .get()
-            .await
-            .map_err(|e| anyhow!("{:?}", e))
+    fn connection(&self) -> impl std::future::Future<Output = Result<Connection>> + Send {
+        async {
+            self.redis_pool()
+                .get()
+                .await
+                .map_err(|e| anyhow!("{:?}", e))
+        }
     }
 }
 

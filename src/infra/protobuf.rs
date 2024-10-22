@@ -70,7 +70,12 @@ impl ProtobufDescriptor {
     }
     pub fn get_message_from_json(&self, message_name: &str, json: &str) -> Result<DynamicMessage> {
         let mut deserializer = Deserializer::from_str(json);
-        let message_descriptor = self.get_message_by_name(message_name).unwrap();
+        let message_descriptor = self
+            .get_message_by_name(message_name)
+            .ok_or(anyhow::anyhow!(
+                "message not found by name: {}",
+                message_name
+            ))?;
         let dynamic_message = DynamicMessage::deserialize(message_descriptor, &mut deserializer)?;
         deserializer.end()?;
         Ok(dynamic_message)
@@ -80,7 +85,12 @@ impl ProtobufDescriptor {
         message_name: &str,
         bytes: &[u8],
     ) -> Result<DynamicMessage> {
-        let message_descriptor = self.get_message_by_name(message_name).unwrap();
+        let message_descriptor = self
+            .get_message_by_name(message_name)
+            .ok_or(anyhow::anyhow!(
+                "message not found by name: {}",
+                message_name
+            ))?;
         let cursor = std::io::Cursor::new(bytes);
         let dynamic_message = DynamicMessage::decode(message_descriptor, cursor)?;
         Ok(dynamic_message)
@@ -111,6 +121,12 @@ mod tests {
     struct ProtobufDescriptorImpl {}
     impl ProtobufDescriptorLoader for ProtobufDescriptorImpl {}
 
+    #[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
+    pub struct TestArg {
+        #[prost(string, repeated, tag = "1")]
+        pub args: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    }
+
     #[test]
     fn test_load_protobuf_descriptor() -> Result<()> {
         let proto_string = r#"
@@ -140,6 +156,39 @@ mod tests {
         assert_eq!(job_descriptor.full_name(), "jobworkerp.data.Job");
         assert_eq!(job_descriptor.package_name(), "jobworkerp.data");
         assert_eq!(job_descriptor.name(), "Job");
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_by_protobuf_descriptor() -> Result<()> {
+        let proto_string = r#"
+syntax = "proto3";
+
+// only for test
+// job args
+message TestArg {
+  repeated string args = 1;
+}
+        "#;
+        let descriptor = ProtobufDescriptor::new(&proto_string.to_string())?;
+        let test_arg_descriptor = descriptor.get_message_by_name("TestArg").unwrap();
+        assert_eq!(test_arg_descriptor.full_name(), "TestArg");
+        assert_eq!(test_arg_descriptor.package_name(), "");
+        assert_eq!(test_arg_descriptor.name(), "TestArg");
+        let message = descriptor.get_message_from_bytes(
+            "TestArg",
+            TestArg {
+                args: vec!["fuga".to_string(), "hoge".to_string()],
+            }
+            .encode_to_vec()
+            .as_slice(),
+        )?;
+        assert_eq!(message.descriptor().name(), "TestArg");
+        let args_field = message.get_field_by_name("args").unwrap();
+        let args_list = args_field.as_list().unwrap();
+        let args: Vec<&str> = args_list.iter().flat_map(|v| v.as_str()).collect_vec();
+        assert_eq!(args, vec!["fuga", "hoge"]);
+
         Ok(())
     }
 

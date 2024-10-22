@@ -150,7 +150,7 @@ pub mod test {
             pool_create_timeout_msec: None,
             pool_wait_timeout_msec: None,
             pool_recycle_timeout_msec: None,
-            pool_size: 10,
+            pool_size: 20,
         }
     });
 
