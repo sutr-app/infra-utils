@@ -86,7 +86,7 @@ impl ChromeDriverFactory {
 
     fn build_chrome_capabilities(
         user_agent: impl Into<Option<String>> + Send,
-    ) -> Result<ChromeCapabilities, WebDriverError> {
+    ) -> Result<ChromeCapabilities, Box<WebDriverError>> {
         let mut caps = DesiredCapabilities::chrome();
         caps.set_headless()?;
         // caps.add_extension(Path::new("./adblock.crx"))?;
@@ -122,7 +122,7 @@ impl ChromeDriverFactory {
         // page_load_timeout: Duration,
         // script_timeout: Duration,
         // user_agent: impl Into<String> + Sync,
-    ) -> Result<Self, WebDriverError> {
+    ) -> Result<Self, Box<WebDriverError>> {
         tracing::info!("setup chrome driver: {:?}", config);
         let caps = Self::build_chrome_capabilities(config.user_agent.clone())?;
 
@@ -158,7 +158,7 @@ pub struct WebDriverManagerImpl {
 }
 
 impl WebDriverManagerImpl {
-    pub async fn new(config: WebDriverConfig) -> Result<Self, WebDriverError> {
+    pub async fn new(config: WebDriverConfig) -> Result<Self, Box<WebDriverError>> {
         let driver = ChromeDriverFactory::new(config).await?;
         Ok(Self {
             web_driver_factory: driver,
