@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
+use prost::Message;
 use prost_reflect::{DescriptorPool, DynamicMessage, MessageDescriptor, ReflectMessage};
 use serde_json::de::Deserializer;
+use std::io::Cursor;
 use std::path::Path;
 use std::{fs, path::PathBuf};
 use tempfile::{self, TempDir};
@@ -95,8 +97,7 @@ impl ProtobufDescriptor {
         let dynamic_message = DynamicMessage::decode(message_descriptor, cursor)?;
         Ok(dynamic_message)
     }
-    #[allow(dead_code)]
-    fn decode_from_json<T: ReflectMessage + Default>(json: impl AsRef<str>) -> Result<T> {
+    pub fn decode_from_json<T: ReflectMessage + Default>(json: impl AsRef<str>) -> Result<T> {
         let descriptor = T::default().descriptor();
         let mut deserializer = serde_json::Deserializer::from_str(json.as_ref());
         let decoded = DynamicMessage::deserialize(descriptor, &mut deserializer)?;
@@ -105,6 +106,14 @@ impl ProtobufDescriptor {
             "decode_from_json: on transcoding dynamic message to {}",
             std::any::type_name::<T>()
         ))
+    }
+    pub fn serialize_message<T: Message>(arg: &T) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(arg.encoded_len());
+        arg.encode(&mut buf).unwrap();
+        buf
+    }
+    pub fn deserialize_message<T: Message + Default>(buf: &[u8]) -> Result<T> {
+        T::decode(&mut Cursor::new(buf)).map_err(|e| e.into())
     }
 }
 
