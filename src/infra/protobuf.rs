@@ -66,7 +66,12 @@ impl ProtobufDescriptor {
         let pool = ProtobufDescriptor::build_protobuf_descriptor(proto_string)?;
         Ok(ProtobufDescriptor { pool })
     }
-
+    pub fn get_message_names(&self) -> Vec<String> {
+        self.pool
+            .all_messages()
+            .map(|message| message.full_name().to_string())
+            .collect()
+    }
     pub fn get_message_by_name(&self, message_name: &str) -> Option<MessageDescriptor> {
         self.pool.get_message_by_name(message_name)
     }
@@ -215,6 +220,10 @@ message TestArg {
         }
         "#;
         let descriptor = ProtobufDescriptor::new(&proto_string.to_string())?;
+        assert_eq!(
+            descriptor.get_message_names(),
+            vec!["jobworkerp.data.Job".to_string()]
+        );
         let json = r#"
         {
             "id": 1,
