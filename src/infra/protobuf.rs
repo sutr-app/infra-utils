@@ -75,19 +75,37 @@ impl ProtobufDescriptor {
     pub fn get_message_by_name(&self, message_name: &str) -> Option<MessageDescriptor> {
         self.pool.get_message_by_name(message_name)
     }
-    pub fn get_message_from_json(&self, message_name: &str, json: &str) -> Result<DynamicMessage> {
+    pub fn get_message_from_json(
+        descriptor: MessageDescriptor,
+        json: &str,
+    ) -> Result<DynamicMessage> {
         let mut deserializer = Deserializer::from_str(json);
+        let dynamic_message = DynamicMessage::deserialize(descriptor, &mut deserializer)?;
+        deserializer.end()?;
+        Ok(dynamic_message)
+    }
+    pub fn get_message_by_name_from_json(
+        &self,
+        message_name: &str,
+        json: &str,
+    ) -> Result<DynamicMessage> {
         let message_descriptor = self
             .get_message_by_name(message_name)
             .ok_or(anyhow::anyhow!(
                 "message not found by name: {}",
                 message_name
             ))?;
-        let dynamic_message = DynamicMessage::deserialize(message_descriptor, &mut deserializer)?;
-        deserializer.end()?;
-        Ok(dynamic_message)
+        Self::get_message_from_json(message_descriptor, json)
     }
     pub fn get_message_from_bytes(
+        descriptor: MessageDescriptor,
+        bytes: &[u8],
+    ) -> Result<DynamicMessage> {
+        let cursor = std::io::Cursor::new(bytes);
+        let dynamic_message = DynamicMessage::decode(descriptor, cursor)?;
+        Ok(dynamic_message)
+    }
+    pub fn get_message_by_name_from_bytes(
         &self,
         message_name: &str,
         bytes: &[u8],
@@ -98,9 +116,7 @@ impl ProtobufDescriptor {
                 "message not found by name: {}",
                 message_name
             ))?;
-        let cursor = std::io::Cursor::new(bytes);
-        let dynamic_message = DynamicMessage::decode(message_descriptor, cursor)?;
-        Ok(dynamic_message)
+        Self::get_message_from_bytes(message_descriptor, bytes)
     }
     pub fn decode_from_json<T: ReflectMessage + Default>(json: impl AsRef<str>) -> Result<T> {
         let descriptor = T::default().descriptor();
@@ -189,7 +205,7 @@ message TestArg {
         assert_eq!(test_arg_descriptor.full_name(), "TestArg");
         assert_eq!(test_arg_descriptor.package_name(), "");
         assert_eq!(test_arg_descriptor.name(), "TestArg");
-        let message = descriptor.get_message_from_bytes(
+        let message = descriptor.get_message_by_name_from_bytes(
             "TestArg",
             TestArg {
                 args: vec!["fuga".to_string(), "hoge".to_string()],
@@ -231,7 +247,7 @@ message TestArg {
             "description": "test desc"
         }
         "#;
-        let message = descriptor.get_message_from_json("jobworkerp.data.Job", json)?;
+        let message = descriptor.get_message_by_name_from_json("jobworkerp.data.Job", json)?;
 
         assert_eq!(message.descriptor().name(), "Job");
         assert_eq!(
