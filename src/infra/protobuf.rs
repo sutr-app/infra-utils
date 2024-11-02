@@ -141,7 +141,7 @@ impl ProtobufDescriptor {
             if let Some(m) = value.as_message() {
                 Self::print_dynamic_message(m);
             } else {
-                println!("{}: {}", field.name(), value.to_string())
+                println!("{}: {}", field.name(), value)
             }
         });
     }
