@@ -72,6 +72,9 @@ impl ProtobufDescriptor {
             .map(|message| message.full_name().to_string())
             .collect()
     }
+    pub fn get_messages(&self) -> Vec<MessageDescriptor> {
+        self.pool.all_messages().collect()
+    }
     pub fn get_message_by_name(&self, message_name: &str) -> Option<MessageDescriptor> {
         self.pool.get_message_by_name(message_name)
     }
