@@ -136,6 +136,15 @@ impl ProtobufDescriptor {
     pub fn deserialize_message<T: Message + Default>(buf: &[u8]) -> Result<T> {
         T::decode(&mut Cursor::new(buf)).map_err(|e| e.into())
     }
+    pub fn print_dynamic_message(message: &DynamicMessage) {
+        message.fields().for_each(|(field, value)| {
+            if let Some(m) = value.as_message() {
+                Self::print_dynamic_message(m);
+            } else {
+                println!("{}: {}", field.name(), value.to_string())
+            }
+        });
+    }
 }
 
 // create test
@@ -266,6 +275,8 @@ message TestArg {
                 .unwrap(),
             "test desc"
         );
+        ProtobufDescriptor::print_dynamic_message(&message);
+
         let bytes = message.encode_to_vec();
         let cursor = Cursor::new(bytes);
         let mes = DynamicMessage::decode(
