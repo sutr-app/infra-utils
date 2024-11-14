@@ -41,13 +41,19 @@ pub mod test {
 
     #[cfg(feature = "mysql")]
     pub static MYSQL_CONFIG: Lazy<RdbConfig> = Lazy::new(|| {
-        let host = std::env::var("TEST_MYSQL_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-        RdbConfig::new(
-            host,
-            "3306".to_string(),
-            "mysql".to_string(),
-            "mysql".to_string(),
-            "test".to_string(),
+        //let host = std::env::var("TEST_MYSQL_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+        //RdbConfig::new(
+        //    host,
+        //    "3306".to_string(),
+        //    "mysql".to_string(),
+        //    "mysql".to_string(),
+        //    "test".to_string(),
+        //    20,
+        //)
+        RdbConfig::new_by_url(
+            std::env::var("TEST_MYSQL_URL")
+                .unwrap_or_else(|_| "mysql://mysql:mysql@127.0.0.1:3306/test".to_string())
+                .as_str(),
             20,
         )
     });
