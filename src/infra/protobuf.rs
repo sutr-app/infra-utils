@@ -139,12 +139,16 @@ impl ProtobufDescriptor {
     pub fn deserialize_message<T: Message + Default>(buf: &[u8]) -> Result<T> {
         T::decode(&mut Cursor::new(buf)).map_err(|e| e.into())
     }
-    pub fn print_dynamic_message(message: &DynamicMessage) {
+    pub fn print_dynamic_message(message: &DynamicMessage, byte_to_string: bool) {
         message.fields().for_each(|(field, value)| {
             if let Some(m) = value.as_message() {
-                Self::print_dynamic_message(m);
+                Self::print_dynamic_message(m, byte_to_string);
+            } else if byte_to_string {
+                if let Some(value) = value.as_bytes() {
+                    println!("{}: {}", field.name(), String::from_utf8_lossy(value))
+                }
             } else {
-                println!("{}: {}", field.name(), value)
+                println!("{}: {:?}", field.name(), value);
             }
         });
     }
@@ -158,7 +162,7 @@ mod tests {
     use itertools::Itertools;
     use prost::Message;
     use prost_reflect::ReflectMessage;
-    use std::io::Cursor;
+    use std::io::{Cursor, Write};
 
     struct ProtobufDescriptorImpl {}
     impl ProtobufDescriptorLoader for ProtobufDescriptorImpl {}
@@ -256,7 +260,7 @@ message TestArg {
         {
             "id": 1,
             "name": "test name",
-            "description": "test desc"
+            "description": "test desc: あいうえお"
         }
         "#;
         let message = descriptor.get_message_by_name_from_json("jobworkerp.data.Job", json)?;
@@ -276,9 +280,9 @@ message TestArg {
                 .unwrap()
                 .as_str()
                 .unwrap(),
-            "test desc"
+            "test desc: あいうえお"
         );
-        ProtobufDescriptor::print_dynamic_message(&message);
+        ProtobufDescriptor::print_dynamic_message(&message, true);
 
         let bytes = message.encode_to_vec();
         let cursor = Cursor::new(bytes);
@@ -288,6 +292,8 @@ message TestArg {
                 .unwrap(),
             cursor,
         )?;
+        println!("message:{:?}", mes);
+        std::io::stdout().flush()?;
         assert_eq!(message, mes);
         Ok(())
     }
