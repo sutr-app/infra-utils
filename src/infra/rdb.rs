@@ -1,10 +1,10 @@
-use std::time::Duration;
-
 use anyhow::{Context, Result};
+use command_utils::util::result::ToOption;
 use debug_stub_derive::DebugStub;
 use log::LevelFilter;
 use serde::Deserialize;
 use sqlx::ConnectOptions;
+use std::time::Duration;
 
 #[cfg(feature = "mysql")]
 pub type Rdb = sqlx::MySql;
@@ -39,6 +39,18 @@ pub trait RdbConfigTrait: Clone {
     fn rdb_url(&self) -> String;
 
     fn max_connections(&self) -> u32;
+}
+impl RdbConfigImpl {
+    pub fn new(host: String, port: String, user: String, password: String, dbname: String) -> Self {
+        RdbConfigImpl {
+            host,
+            port,
+            user,
+            password,
+            dbname,
+            max_connections: 20,
+        }
+    }
 }
 
 #[derive(Deserialize, Clone, DebugStub)]
@@ -166,6 +178,28 @@ impl RdbConfig {
             dbname,
             max_connections,
         })
+    }
+    pub fn load_db_config_from_env(prefix: String) -> Option<RdbConfig> {
+        Self::load_separated_db_config_from_env(prefix.clone())
+            .or_else(|| Self::load_db_url_config_from_env(prefix))
+    }
+    fn load_separated_db_config_from_env(prefix: String) -> Option<RdbConfig> {
+        envy::prefixed(format!("{}{}", &prefix, "SQLITE_"))
+            .from_env::<RdbConfigImpl>()
+            .or_else(|_| {
+                envy::prefixed(format!("{}{}", &prefix, "MYSQL_")).from_env::<RdbConfigImpl>()
+            })
+            .to_option()
+            .map(RdbConfig::Separate)
+    }
+    fn load_db_url_config_from_env(prefix: String) -> Option<RdbConfig> {
+        envy::prefixed(format!("{}{}", &prefix, "SQLITE_"))
+            .from_env::<RdbUrlConfigImpl>()
+            .or_else(|_| {
+                envy::prefixed(format!("{}{}", &prefix, "MYSQL_")).from_env::<RdbUrlConfigImpl>()
+            })
+            .to_option()
+            .map(RdbConfig::Url)
     }
 }
 
