@@ -417,6 +417,10 @@ pub trait WebScraper: UseWebDriver + Send + Sync {
         .flatten()
     }
 
+    async fn close(&self) -> Result<(), WebDriverError> {
+        self.driver().clone().close_window().await
+    }
+
     async fn quit(&self) -> Result<(), WebDriverError> {
         self.driver().clone().quit().await
     }
