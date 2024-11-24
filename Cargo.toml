@@ -52,7 +52,7 @@ stretto = { version = "0.8", features = ["async"] }
 strum = "0.26"
 strum_macros = "0.26"
 tempfile = "3"
-thirtyfour = "0.32"
+thirtyfour = "0.34"
 tonic = { version = "0.12" }
 tonic-build = { version = "0.12" }
 tokio = { version = "1", features = [
