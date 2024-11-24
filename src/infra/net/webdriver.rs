@@ -4,14 +4,11 @@ use chrono::{DateTime, Datelike, FixedOffset};
 use command_utils::util::datetime;
 use command_utils::util::option::FlatMap;
 use command_utils::util::result::Flatten;
-use command_utils::util::result::ToOption;
 use deadpool::managed::{
     Manager, Object, Pool, PoolConfig, PoolError, RecycleError, RecycleResult, Timeouts,
 };
 use deadpool::Runtime;
 use deadpool_redis::Metrics;
-use futures::future::{self};
-use itertools::Itertools;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -88,9 +85,24 @@ impl ChromeDriverFactory {
         user_agent: impl Into<Option<String>> + Send,
     ) -> Result<ChromeCapabilities, Box<WebDriverError>> {
         let mut caps = DesiredCapabilities::chrome();
-        caps.set_headless()?;
+        // https://stackoverflow.com/a/52340526
         // caps.add_extension(Path::new("./adblock.crx"))?;
+        caps.add_arg("start-maximized")?; // open Browser in maximized mode
+        caps.add_arg("enable-automation")?; // https://stackoverflow.com/a/43840128/1689770
+        caps.set_headless()?;
+        caps.add_arg("--no-sandbox")?; // Bypass OS security model // necessary in docker env
         caps.add_arg("--disable-dev-shm-usage")?; // if tab crash error occurred (add shm mem to container or this option turned on)
+        caps.add_arg("--disable-browser-side-navigation")?; //https://stackoverflow.com/a/49123152/1689770"
+        caps.add_arg("--disable-gpu")?;
+        // caps.set_disable_local_storage()?;
+        // https://stackoverflow.com/questions/48450594/selenium-timed-out-receiving-message-from-renderer
+        // https://stackoverflow.com/questions/51959986/how-to-solve-selenium-chromedriver-timed-out-receiving-message-from-renderer-exc
+        caps.add_arg("--disable-infobars")?; // disabling infobars
+                                             // caps.add_arg("--disable-extensions")?; // disabling extensions
+                                             //        caps.add_arg("--disk-cache=false")?;
+                                             //        caps.add_arg("--load-images=false")?;
+                                             //        caps.add_arg("--dns-prefetch-disable")?;
+
         caps.add_arg(
             format!(
                 "--user-agent={}",
@@ -100,19 +112,7 @@ impl ChromeDriverFactory {
             )
             .as_str(),
         )?;
-        caps.add_arg("--disk-cache=false")?;
-        caps.add_arg("--load-images=false")?;
-        caps.add_arg("--dns-prefetch-disable")?;
         caps.add_arg("--lang=ja-JP")?;
-        // https://stackoverflow.com/questions/48450594/selenium-timed-out-receiving-message-from-renderer
-        // https://stackoverflow.com/questions/51959986/how-to-solve-selenium-chromedriver-timed-out-receiving-message-from-renderer-exc
-        caps.add_arg("--disable-gpu")?;
-        // caps.add_chrome_arg("--disable-browser-side-navigation")?; //https://stackoverflow.com/a/49123152/1689770"
-        // caps.add_chrome_arg("start-maximized")?; // open Browser in maximized mode
-        // caps.add_chrome_arg("disable-infobars")?; // disabling infobars
-        // caps.add_chrome_arg("--disable-extensions")?; // disabling extensions
-        // caps.add_chrome_arg("--disable-dev-shm-usage")?; // overcome limited resource problems
-        caps.add_arg("--no-sandbox")?; // Bypass OS security model // necessary in docker env
         Ok(caps)
     }
 
@@ -335,16 +335,14 @@ pub trait WebScraper: UseWebDriver + Send + Sync {
                 .find_all(tsel)
                 .await
                 .inspect_err(|e| tracing::warn!("error in scraping tags: {:?}", &e))?;
-            future::join_all(
-                tag_elems
-                    .iter()
-                    .map(|ele| async { ele.text().await.to_option() }),
-            )
-            .await
-            .iter()
-            .flatten()
-            .cloned()
-            .collect_vec()
+
+            let mut tags = Vec::new();
+            for elem in tag_elems.iter() {
+                elem.wait_until().displayed().await?;
+                let tag = elem.text().await?;
+                tags.push(tag);
+            }
+            tags
         } else {
             vec![]
         };
