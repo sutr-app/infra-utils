@@ -6,7 +6,10 @@ use robotstxt::DefaultMatcher;
 use std::{borrow::BorrowMut, io::Cursor, time::Duration};
 use url::Url;
 
-use super::webdriver::{UseWebDriver, WebDriverWrapper};
+use super::{
+    reqwest::ReqwestClient,
+    webdriver::{UseWebDriver, WebDriverWrapper},
+};
 
 fn robots_txt_url(url_str: &str) -> Result<Url> {
     let mut url = Url::parse(url_str)?;
@@ -16,9 +19,15 @@ fn robots_txt_url(url_str: &str) -> Result<Url> {
     Ok(url)
 }
 
-pub async fn get_robots_txt(url_str: &str, user_agent: Option<&String>) -> Result<Option<String>> {
+pub async fn get_robots_txt(
+    url_str: &str,
+    user_agent: Option<&String>,
+    timeout: Option<Duration>,
+) -> Result<Option<String>> {
     let robots_url = robots_txt_url(url_str)?;
-    let client = reqwest::Client::builder().timeout(Duration::new(30, 0));
+    let client = reqwest::Client::builder()
+        .timeout(timeout.unwrap_or_else(|| Duration::new(30, 0)))
+        .connect_timeout(timeout.unwrap_or_else(|| Duration::new(30, 0)));
     let client = if let Some(ua) = user_agent {
         client.user_agent(ua).build()?
     } else {
@@ -50,7 +59,7 @@ pub async fn readable_by_robots_txt(
     user_agent: Option<&String>,
 ) -> Result<Option<bool>> {
     let url = Url::parse(url_str)?;
-    let robots_txt = get_robots_txt(url_str, user_agent).await?;
+    let robots_txt = get_robots_txt(url_str, user_agent, None).await?;
     Ok(robots_txt.map(|t| {
         available_url_by_robots_txt(
             t.as_str(),
@@ -71,13 +80,8 @@ pub async fn scrape_to_utf8(
             Err(anyhow!("denied by robots.txt"))?
         }
     }
-    let client = reqwest::Client::builder().timeout(Duration::new(30, 0));
-    let client = if let Some(ua) = user_agent {
-        client.user_agent(ua).build()?
-    } else {
-        client.build()?
-    };
-    let res = client.get(url).send().await?;
+    let client = ReqwestClient::new(user_agent, Some(Duration::new(30, 0)), Some(2))?;
+    let res = client.client().get(url).send().await?;
     if res.status().is_success() {
         let url = Url::parse(url)?;
         // add to encode to utf8 (all in buffer)
@@ -170,10 +174,14 @@ mod tests {
         // .await
         // .unwrap()
         // .is_none());
-        let robots_txt = get_robots_txt("https://www.google.com/hogefuga?fugahoge#id", ua.as_ref())
-            .await
-            .unwrap()
-            .unwrap();
+        let robots_txt = get_robots_txt(
+            "https://www.google.com/hogefuga?fugahoge#id",
+            ua.as_ref(),
+            None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
         println!("robots_txt: {}", robots_txt);
 
         assert!(!robots_txt.is_empty());
