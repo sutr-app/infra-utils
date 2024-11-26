@@ -288,10 +288,10 @@ pub async fn new_rdb_pool(config: &RdbConfig, _sqlite_schema: Option<&String>) -
     MySqlPoolOptions::new()
         .idle_timeout(Some(Duration::from_secs(10 * 60)))
         .max_lifetime(Some(Duration::from_secs(10 * 60))) // same as mariadb server wait_timeout
-        .acquire_timeout(Duration::from_secs(30))
+        .acquire_timeout(Duration::from_secs(5))
         // .test_before_acquire(false)
         .max_connections(config.max_connections())
-        .min_connections(config.max_connections() / 5 + 1)
+        // .min_connections(config.max_connections() / 5 + 1)
         .connect_with(options)
         .await
         .context(format!(
