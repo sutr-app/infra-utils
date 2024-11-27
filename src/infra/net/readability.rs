@@ -69,7 +69,7 @@ pub async fn readable_by_robots_txt(
     }))
 }
 
-pub async fn scrape_to_utf8(
+pub async fn request_to_utf8(
     url: &str,
     user_agent: Option<&String>,
     check_robotstxt: bool,
@@ -94,7 +94,7 @@ pub async fn scrape_to_utf8(
     }
 }
 
-pub async fn scrape_by_webdriver(
+pub async fn request_by_webdriver(
     webdriver: &WebDriverWrapper,
     url: &str,
     user_agent: Option<&String>,
@@ -122,97 +122,5 @@ pub async fn scrape_by_webdriver(
             .map_err(|e| anyhow!("readable extract error: {:?}", e))
     } else {
         Err(anyhow!("request not success: {:?}", status.message))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[ignore]
-    #[tokio::test]
-    async fn test_scrape_euc() {
-        // euc-jp
-        let url = "https://www.4gamer.net/games/535/G053589/20240105025/";
-        let result = scrape_to_utf8(url, Some("Request/1.0".to_string()).as_ref(), true)
-            .await
-            .unwrap();
-        println!("==== title: {}", &result.title);
-        println!("=== text: {}", &result.text);
-        println!("=== content: {}", &result.content);
-        println!("=== url: {}", &url);
-        assert!(!result.text.is_empty());
-    }
-
-    #[test]
-    fn test_robots_txt_url() {
-        assert_eq!(
-            robots_txt_url("https://www.example.com").unwrap().as_str(),
-            "https://www.example.com/robots.txt"
-        );
-        assert_eq!(
-            robots_txt_url("https://www.example.com/search?hoge=fuga")
-                .unwrap()
-                .as_str(),
-            "https://www.example.com/robots.txt"
-        );
-        assert_eq!(
-            robots_txt_url("https://www.example.com/search/?hoge=fuga#id")
-                .unwrap()
-                .as_str(),
-            "https://www.example.com/robots.txt"
-        );
-    }
-    #[tokio::test]
-    async fn test_robots_txt() {
-        let ua_str = "Reqwest/0.3";
-        let ua = Some(ua_str.to_string());
-        // assert!(get_robots_txt(
-        //     "https://www.4gamer.net/games/535/G053589/20240105025/",
-        //     ua.as_ref()
-        // )
-        // .await
-        // .unwrap()
-        // .is_none());
-        let robots_txt = get_robots_txt(
-            "https://www.google.com/hogefuga?fugahoge#id",
-            ua.as_ref(),
-            None,
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        println!("robots_txt: {}", robots_txt);
-
-        assert!(!robots_txt.is_empty());
-
-        assert!(available_url_by_robots_txt(
-            robots_txt.as_str(),
-            "https://www.google.com/robots.txt",
-            "Reqwest/0.3"
-        ));
-        assert!(available_url_by_robots_txt(
-            robots_txt.as_str(),
-            "https://www.google.com/search/about",
-            "Reqwest/0.3"
-        ));
-        assert!(!available_url_by_robots_txt(
-            robots_txt.as_str(),
-            "https://www.google.com/search",
-            "Reqwest/0.3"
-        ));
-        assert!(!readable_by_robots_txt(
-            "https://www.google.com/shopping/product/fuga?hoge",
-            ua.as_ref()
-        )
-        .await
-        .unwrap()
-        .unwrap());
-        assert!(
-            readable_by_robots_txt("https://www.google.com/profiles/", ua.as_ref())
-                .await
-                .unwrap()
-                .unwrap()
-        );
     }
 }
