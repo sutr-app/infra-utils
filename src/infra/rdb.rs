@@ -291,7 +291,7 @@ pub async fn new_rdb_pool(config: &RdbConfig, _sqlite_schema: Option<&String>) -
         .acquire_timeout(Duration::from_secs(5))
         // .test_before_acquire(false)
         .max_connections(config.max_connections())
-        // .min_connections(config.max_connections() / 5 + 1)
+        .min_connections(config.max_connections() / 5 + 1)
         .connect_with(options)
         .await
         .context(format!(
