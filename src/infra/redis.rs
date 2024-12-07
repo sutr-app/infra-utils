@@ -7,6 +7,7 @@ use redis::aio::MultiplexedConnection as RedisConnection;
 use redis::aio::PubSub;
 use redis::Client;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::time::Duration;
 
 #[derive(Deserialize, Clone, DebugStub)]
@@ -51,14 +52,60 @@ pub trait UseRedisClient: Send + Sync {
         &self,
         channel: &str,
         message: &Vec<u8>,
-    ) -> impl std::future::Future<Output = Result<bool>> + Send {
+    ) -> impl std::future::Future<Output = Result<u32>> + Send {
         async move {
             let mut conn = self
                 .redis_client()
                 .get_multiplexed_async_connection()
                 .await?;
-            conn.publish::<&str, &Vec<u8>, ()>(channel, message).await?;
-            Ok(true)
+            let r = conn
+                .publish::<&str, &Vec<u8>, u32>(channel, message)
+                .await?;
+            Ok(r)
+        }
+    }
+
+    fn publish_multi_if_listen(
+        &self,
+        channels: &[String],
+        message: &Vec<u8>,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send {
+        async move {
+            let mut res = false;
+            for ch in channels {
+                let mut conn = self
+                    .redis_client()
+                    .get_multiplexed_async_connection()
+                    .await?;
+                let (channel, sub_count) = self.numsub(&mut conn, ch).await?;
+                if sub_count > 0 {
+                    conn.publish::<&str, &Vec<u8>, ()>(channel.as_str(), message)
+                        .await?;
+                    res = true;
+                }
+            }
+            Ok(res)
+        }
+    }
+
+    fn numsub(
+        &self,
+        conn: &mut RedisConnection,
+        channel: &str,
+    ) -> impl std::future::Future<Output = Result<(String, i64)>> + Send {
+        async move {
+            // let mut conn = self
+            //     .redis_client()
+            //     .get_multiplexed_async_connection()
+            //     .await?;
+
+            let subscriptions_counts: HashMap<String, u32> = redis::cmd("PUBSUB")
+                .arg("NUMSUB")
+                .arg(channel)
+                .query_async(conn)
+                .await?;
+            let subscription_count = *subscriptions_counts.get(channel).unwrap();
+            Ok((channel.to_string(), subscription_count as i64))
         }
     }
 }
@@ -195,16 +242,17 @@ pub trait UseRedisLock: UseRedisPool + Send + Sync {
     }
 }
 
-#[cfg(feature = "redis-test")]
+// #[cfg(feature = "redis-test")]
 #[cfg(test)]
 mod test {
     use crate::infra::{
-        redis::{new_redis_connection, new_redis_pool, UseRedisLock, UseRedisPool},
+        redis::{new_redis_connection, new_redis_pool, RedisClient, UseRedisLock, UseRedisPool},
         test::REDIS_CONFIG,
     };
     use anyhow::Result;
     use deadpool_redis::redis::AsyncCommands as PoolAsyncCommands;
     use deadpool_redis::Pool;
+    use futures::StreamExt;
     use serde::{Deserialize, Serialize};
 
     #[tokio::test]
@@ -373,6 +421,101 @@ mod test {
         client.unlock(key).await?;
         // try lock again
         assert!(client.lock(key, 10).await.is_ok());
+        // for end
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn use_redis_client_pubsub_test() -> Result<()> {
+        use crate::infra::redis::UseRedisClient;
+        #[derive(Clone)]
+        struct RedisPool {
+            pool: Pool,
+            client: RedisClient,
+        }
+        impl UseRedisPool for RedisPool {
+            fn redis_pool(&self) -> &Pool {
+                &self.pool
+            }
+        }
+        impl UseRedisClient for RedisPool {
+            fn redis_client(&self) -> &RedisClient {
+                &self.client
+            }
+        }
+        let config = REDIS_CONFIG.clone();
+        let p = new_redis_pool(config.clone()).await?;
+        let client = RedisPool {
+            pool: p,
+            client: RedisClient::open(config.url)?,
+        };
+        let ch = "test";
+        let mut sub = client.subscribe(ch).await?;
+        let mut conn = client
+            .redis_client()
+            .get_multiplexed_async_connection()
+            .await?;
+        assert_eq!(client.numsub(&mut conn, ch).await?, (ch.to_string(), 1));
+        let pb = client.publish(ch, &vec![1, 2, 3]).await?;
+        assert!(pb == 1);
+        let msg = sub.on_message().next().await.unwrap();
+        assert_eq!(msg.get_payload::<Vec<u8>>().unwrap(), vec![1, 2, 3]);
+        // for end
+        Ok(())
+    }
+    #[tokio::test]
+    async fn use_redis_client_pubsub_test2() -> Result<()> {
+        use crate::infra::redis::UseRedisClient;
+        #[derive(Clone)]
+        struct RedisPool {
+            pool: Pool,
+            client: RedisClient,
+        }
+        impl UseRedisPool for RedisPool {
+            fn redis_pool(&self) -> &Pool {
+                &self.pool
+            }
+        }
+        impl UseRedisClient for RedisPool {
+            fn redis_client(&self) -> &RedisClient {
+                &self.client
+            }
+        }
+        let config = REDIS_CONFIG.clone();
+        let p = new_redis_pool(config.clone()).await?;
+        let client = RedisPool {
+            pool: p,
+            client: RedisClient::open(config.url)?,
+        };
+        let ch = "test".to_string();
+        let ch2 = "test2".to_string();
+        let pb = client.publish(ch.as_str(), &vec![0, 1]).await?;
+        assert!(pb == 0);
+        let pb = client
+            .publish_multi_if_listen(&[ch.clone(), ch2.clone()], &vec![0, 1])
+            .await?;
+        assert!(!pb);
+        let mut sub = client.subscribe(ch.as_str()).await?;
+        let mut sub2 = client.subscribe(ch2.as_str()).await?;
+
+        let mut conn = client
+            .redis_client()
+            .get_multiplexed_async_connection()
+            .await?;
+        assert_eq!(
+            client.numsub(&mut conn, ch.as_str()).await?,
+            (ch.to_string(), 1)
+        );
+        let pb = client
+            .publish_multi_if_listen(&[ch, ch2], &vec![1, 2, 3])
+            .await?;
+        assert!(pb);
+        let msg = sub.on_message().next().await.unwrap();
+        assert_eq!(msg.get_payload::<Vec<u8>>().unwrap(), vec![1, 2, 3]);
+
+        let msg2 = sub2.on_message().next().await.unwrap();
+        assert_eq!(msg2.get_payload::<Vec<u8>>().unwrap(), vec![1, 2, 3]);
+
         // for end
         Ok(())
     }
