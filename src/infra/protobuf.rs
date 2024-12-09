@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use itertools::Itertools;
 use prost::Message;
 use prost_reflect::{DescriptorPool, DynamicMessage, MessageDescriptor, ReflectMessage};
 use serde_json::de::Deserializer;
@@ -140,17 +141,26 @@ impl ProtobufDescriptor {
         T::decode(&mut Cursor::new(buf)).map_err(|e| e.into())
     }
     pub fn print_dynamic_message(message: &DynamicMessage, byte_to_string: bool) {
-        message.fields().for_each(|(field, value)| {
-            if let Some(m) = value.as_message() {
-                Self::print_dynamic_message(m, byte_to_string);
-            } else if byte_to_string {
-                if let Some(value) = value.as_bytes() {
-                    println!("{}: {}", field.name(), String::from_utf8_lossy(value))
+        let message_str = Self::dynamic_message_to_string(message, byte_to_string);
+        println!("{}", message_str);
+    }
+    pub fn dynamic_message_to_string(message: &DynamicMessage, byte_to_string: bool) -> String {
+        message
+            .fields()
+            .map(|(field, value)| {
+                if let Some(m) = value.as_message() {
+                    Self::dynamic_message_to_string(m, byte_to_string)
+                } else if byte_to_string {
+                    if let Some(value) = value.as_bytes() {
+                        format!("{}: {}\n", field.name(), String::from_utf8_lossy(value))
+                    } else {
+                        format!("{}: {:?}\n", field.name(), value)
+                    }
+                } else {
+                    format!("{}: {:?}\n", field.name(), value)
                 }
-            } else {
-                println!("{}: {:?}", field.name(), value);
-            }
-        });
+            })
+            .join("")
     }
 }
 
@@ -295,6 +305,10 @@ message TestArg {
         println!("message:{:?}", mes);
         std::io::stdout().flush()?;
         assert_eq!(message, mes);
+        assert_eq!(
+            ProtobufDescriptor::dynamic_message_to_string(&message, false),
+            "id: I64(1)\nname: String(\"test name\")\ndescription: String(\"test desc: あいうえお\")\n".to_string()
+        );
         Ok(())
     }
 }
