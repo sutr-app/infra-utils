@@ -4,6 +4,7 @@ pub mod mpmc;
 use super::memory::{MemoryCacheConfig, MemoryCacheImpl, UseMemoryCache};
 use anyhow::{anyhow, Result};
 use debug_stub_derive::DebugStub;
+use futures::Stream;
 use std::{collections::HashSet, marker::PhantomData, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
@@ -93,11 +94,12 @@ impl<T: Send + Sync + Clone, C: ChanTrait<ChanBufferItem<T>>> ChanBuffer<T, C> {
             }
         }
         if only_if_exists {
-            self.get_chan_if_exists(&nm)
-                .await
-                .ok_or(anyhow!("channel not found: {}", &nm))?
-                .send_to_chan((uniq_key, data))
-                .await
+            if let Some(c) = self.get_chan_if_exists(&nm).await {
+                c.send_to_chan((uniq_key, data)).await
+            } else {
+                tracing::debug!("channel '{}' not found, not send", &nm);
+                Ok(false)
+            }
         } else {
             self.get_or_create_chan(nm, ttl)
                 .await?
@@ -144,6 +146,31 @@ impl<T: Send + Sync + Clone, C: ChanTrait<ChanBufferItem<T>>> ChanBuffer<T, C> {
             ksl.remove(&ukey);
         }
         Ok(res.1)
+    }
+
+    pub async fn receive_stream_from_chan(
+        &self,
+        name: impl Into<String> + Send,
+        ttl: Option<&Duration>,
+    ) -> Result<impl Stream<Item = T> + Send> {
+        let nm = name.into();
+        let chan = self.get_or_create_chan(nm.clone(), ttl).await?;
+
+        let stream = futures::stream::unfold(chan, |chan| {
+            Box::pin(async move {
+                match chan.receive_from_chan(None).await {
+                    Ok((_, data)) => {
+                        tracing::debug!("receive stream data from chan");
+                        Some((data, chan.clone()))
+                    }
+                    Err(e) => {
+                        tracing::error!("receive stream data from chan error: {:?}", e);
+                        None
+                    }
+                }
+            })
+        });
+        Ok(stream)
     }
 
     pub async fn try_receive_from_chan(

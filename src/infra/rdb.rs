@@ -360,18 +360,13 @@ pub mod test {
     #[sqlx::test]
     pub async fn test_mysql() {
         use crate::infra::rdb::Rdb;
-
-        use super::RdbConfig;
         use anyhow::anyhow;
 
         sqlx::any::install_default_drivers();
         // connection test for localhost
-        let pool = crate::infra::rdb::new_rdb_pool(
-            &RdbConfig::new_by_url("mysql://mysql:mysql@127.0.0.1:3306/test", 20),
-            None,
-        )
-        .await
-        .unwrap();
+        let pool = crate::infra::rdb::new_rdb_pool(&crate::infra::test::MYSQL_CONFIG, None)
+            .await
+            .unwrap();
         let rows = sqlx::query::<Rdb>("SELECT 1 as one")
             .fetch_all(&pool)
             .await
