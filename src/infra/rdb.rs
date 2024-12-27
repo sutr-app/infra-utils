@@ -6,6 +6,18 @@ use serde::Deserialize;
 use sqlx::ConnectOptions;
 use std::time::Duration;
 
+#[cfg(all(feature = "mysql", feature = "postgres"))]
+compile_error!("The `mysql` and `postgres` features are mutually exclusive and cannot be enabled at the same time!");
+
+#[cfg(all(feature = "postgres", feature = "sqlite"))]
+compile_error!("The `postgres` and `sqlite` features are mutually exclusive and cannot be enabled at the same time!");
+
+#[cfg(all(feature = "sqlite", feature = "mysql"))]
+compile_error!("The `sqlite` and `mysql` features are mutually exclusive and cannot be enabled at the same time!");
+
+#[cfg(not(any(feature = "mysql", feature = "postgres", feature = "sqlite")))]
+compile_error!("You must enable exactly one of `mysql`, `postgres`, `sqlite` features!");
+
 #[cfg(feature = "mysql")]
 pub type Rdb = sqlx::MySql;
 #[cfg(feature = "sqlite")]
