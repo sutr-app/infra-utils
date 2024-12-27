@@ -29,6 +29,8 @@ pub mod test {
     pub async fn setup_test_rdb() -> &'static RdbPool {
         if cfg!(feature = "mysql") {
             setup_test_rdb_from::<&str>("sql/mysql").await
+        } else if cfg!(all(feature = "postgres", not(feature = "mysql"))) {
+            setup_test_rdb_from::<&str>("sql/postgres").await
         } else {
             setup_test_rdb_from::<&str>("sql/sqlite").await
         }
@@ -89,10 +91,10 @@ pub mod test {
     }
 
     // migrate once in initialization
-    #[cfg(feature = "postgres")]
+    #[cfg(all(feature = "postgres", not(feature = "mysql")))]
     static POSTGRES_INIT: OnceCell<RdbPool> = OnceCell::const_new();
 
-    #[cfg(feature = "postgres")]
+    #[cfg(all(feature = "postgres", not(feature = "mysql")))]
     pub static POSTGRES_CONFIG: Lazy<RdbConfig> = Lazy::new(|| {
         //let host = std::env::var("TEST_POSTGRES_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
         //RdbConfig::new(
@@ -111,7 +113,7 @@ pub mod test {
         )
     });
 
-    #[cfg(feature = "postgres")]
+    #[cfg(all(feature = "postgres", not(feature = "mysql")))]
     pub async fn setup_test_rdb_from<T: Into<String>>(dir: T) -> &'static RdbPool {
         POSTGRES_INIT
             .get_or_init(|| async {
@@ -129,7 +131,7 @@ pub mod test {
             .await
     }
 
-    #[cfg(feature = "postgres")]
+    #[cfg(all(feature = "postgres", not(feature = "mysql")))]
     pub async fn truncate_tables(pool: &RdbPool, tables: Vec<&str>) {
         let sql = tables
             .iter()
@@ -142,10 +144,10 @@ pub mod test {
             .expect("truncate all tables");
     }
 
-    #[cfg(feature = "sqlite")]
+    #[cfg(not(any(feature = "mysql", feature = "postgres")))]
     static SQLITE_INIT: OnceCell<RdbPool> = OnceCell::const_new();
 
-    #[cfg(feature = "sqlite")]
+    #[cfg(not(any(feature = "mysql", feature = "postgres")))]
     pub static SQLITE_CONFIG: Lazy<RdbConfig> = Lazy::new(|| {
         RdbConfig::new(
             "".to_string(),
@@ -157,7 +159,7 @@ pub mod test {
         )
     });
 
-    #[cfg(feature = "sqlite")]
+    #[cfg(not(any(feature = "mysql", feature = "postgres")))]
     pub async fn setup_test_rdb_from<T: Into<String>>(dir: T) -> &'static RdbPool {
         use command_utils::util::result::TapErr;
 
@@ -171,7 +173,7 @@ pub mod test {
             .await
     }
 
-    #[cfg(feature = "sqlite")]
+    #[cfg(not(any(feature = "mysql", feature = "postgres")))]
     async fn _setup_sqlite_internal<T: Into<String>>(dir: T) -> Result<RdbPool> {
         let pool = crate::infra::rdb::new_rdb_pool(&SQLITE_CONFIG, None).await?;
         Migrator::new(std::path::Path::new(&dir.into()))
@@ -181,7 +183,7 @@ pub mod test {
         Ok(pool)
     }
 
-    #[cfg(feature = "sqlite")]
+    #[cfg(not(any(feature = "mysql", feature = "postgres")))]
     pub async fn truncate_tables(pool: &RdbPool, tables: Vec<&str>) {
         let sql = tables
             .iter()

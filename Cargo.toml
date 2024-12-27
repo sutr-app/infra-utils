@@ -66,11 +66,9 @@ unicode-normalization = "0.1"
 itertools = "0.13"
 
 [features]
-default = ["sqlite"]
-#default = ["postgres"]
+default = ["sqlx/sqlite"]
 redis-test = []
 redis-cluster-test = []
-# use mysql instead of sqlite
+# must be enabled at least one of the following features to use sqlx
 mysql = ["sqlx/mysql"]
 postgres = ["sqlx/postgres"]
-sqlite = ["sqlx/sqlite"]

@@ -6,52 +6,44 @@ use serde::Deserialize;
 use sqlx::ConnectOptions;
 use std::time::Duration;
 
-#[cfg(all(feature = "mysql", feature = "postgres"))]
-compile_error!("The `mysql` and `postgres` features are mutually exclusive and cannot be enabled at the same time!");
-
-#[cfg(all(feature = "postgres", feature = "sqlite"))]
-compile_error!("The `postgres` and `sqlite` features are mutually exclusive and cannot be enabled at the same time!");
-
-#[cfg(all(feature = "sqlite", feature = "mysql"))]
-compile_error!("The `sqlite` and `mysql` features are mutually exclusive and cannot be enabled at the same time!");
-
-#[cfg(not(any(feature = "mysql", feature = "postgres", feature = "sqlite")))]
-compile_error!("You must enable exactly one of `mysql`, `postgres`, `sqlite` features!");
+// cannot make default future off: https://stackoverflow.com/questions/63782238/remove-crate-feature
+// cannot select feature mutually exclusive: https://github.com/rust-lang/cargo/issues/2980
+// so use cfg instead of feature (use sqlite3 as default, use mysql if specified, use postgres if only postgres specified(exclusive))
 
 #[cfg(feature = "mysql")]
 pub type Rdb = sqlx::MySql;
-#[cfg(feature = "sqlite")]
-pub type Rdb = sqlx::Sqlite;
-#[cfg(feature = "postgres")]
+#[cfg(all(feature = "postgres", not(feature = "mysql")))]
 pub type Rdb = sqlx::Postgres;
+#[cfg(not(any(feature = "mysql", feature = "postgres")))]
+pub type Rdb = sqlx::Sqlite;
 
 #[cfg(feature = "mysql")]
 pub type RdbPool = sqlx::MySqlPool;
-#[cfg(feature = "sqlite")]
-pub type RdbPool = sqlx::SqlitePool;
-#[cfg(feature = "postgres")]
+#[cfg(all(feature = "postgres", not(feature = "mysql")))]
 pub type RdbPool = sqlx::PgPool;
+#[cfg(not(any(feature = "mysql", feature = "postgres")))]
+pub type RdbPool = sqlx::SqlitePool;
 
 #[cfg(feature = "mysql")]
 pub type RdbTransaction<'a> = sqlx::Transaction<'a, sqlx::MySql>;
-#[cfg(feature = "sqlite")]
-pub type RdbTransaction<'a> = sqlx::Transaction<'a, sqlx::Sqlite>;
-#[cfg(feature = "postgres")]
+#[cfg(all(feature = "postgres", not(feature = "mysql")))]
 pub type RdbTransaction<'a> = sqlx::Transaction<'a, sqlx::Postgres>;
+#[cfg(not(any(feature = "mysql", feature = "postgres")))]
+pub type RdbTransaction<'a> = sqlx::Transaction<'a, sqlx::Sqlite>;
 
 #[cfg(feature = "mysql")]
 pub type RdbConnectOptions = sqlx::mysql::MySqlConnectOptions;
-#[cfg(feature = "sqlite")]
-pub type RdbConnectOptions = sqlx::sqlite::SqliteConnectOptions;
-#[cfg(feature = "postgres")]
+#[cfg(all(feature = "postgres", not(feature = "mysql")))]
 pub type RdbConnectOptions = sqlx::postgres::PgConnectOptions;
+#[cfg(not(any(feature = "mysql", feature = "postgres")))]
+pub type RdbConnectOptions = sqlx::sqlite::SqliteConnectOptions;
 
 #[cfg(feature = "mysql")]
 pub type RdbArguments = sqlx::mysql::MySqlArguments;
-#[cfg(feature = "sqlite")]
-pub type RdbArguments<'a> = sqlx::sqlite::SqliteArguments<'a>;
-#[cfg(feature = "postgres")]
+#[cfg(all(feature = "postgres", not(feature = "mysql")))]
 pub type RdbArguments = sqlx::postgres::PgArguments;
+#[cfg(not(any(feature = "mysql", feature = "postgres")))]
+pub type RdbArguments<'a> = sqlx::sqlite::SqliteArguments<'a>;
 
 pub trait RdbConfigTrait: Clone {
     fn rdb_url(&self) -> String;
@@ -91,14 +83,14 @@ impl RdbConfigTrait for RdbConfigImpl {
             self.user, self.password, self.host, self.port, self.dbname
         )
     }
-    #[cfg(feature = "postgres")]
+    #[cfg(all(feature = "postgres", not(feature = "mysql")))]
     fn rdb_url(&self) -> String {
         format!(
             "postgres://{}:{}@{}:{}/{}",
             self.user, self.password, self.host, self.port, self.dbname
         )
     }
-    #[cfg(feature = "sqlite")]
+    #[cfg(not(any(feature = "mysql", feature = "postgres")))]
     fn rdb_url(&self) -> String {
         format!("sqlite://{}", self.dbname)
     }
@@ -108,7 +100,7 @@ impl RdbConfigTrait for RdbConfigImpl {
 }
 
 impl Default for RdbConfigImpl {
-    #[cfg(feature = "sqlite")]
+    #[cfg(not(any(feature = "mysql", feature = "postgres")))]
     fn default() -> Self {
         tracing::info!("Use default RdbConfig (sqlite3).");
         RdbConfigImpl {
@@ -132,7 +124,7 @@ impl Default for RdbConfigImpl {
             max_connections: 20,
         }
     }
-    #[cfg(feature = "postgres")]
+    #[cfg(all(feature = "postgres", not(feature = "mysql")))]
     fn default() -> Self {
         tracing::info!("Use default RdbConfig (postgres).");
         RdbConfigImpl {
@@ -161,7 +153,7 @@ impl RdbConfigTrait for RdbUrlConfigImpl {
             "".to_string()
         }
     }
-    #[cfg(feature = "postgres")]
+    #[cfg(all(feature = "postgres", not(feature = "mysql")))]
     fn rdb_url(&self) -> String {
         if self.url.starts_with("postgres") {
             self.url.clone()
@@ -169,7 +161,7 @@ impl RdbConfigTrait for RdbUrlConfigImpl {
             "".to_string()
         }
     }
-    #[cfg(feature = "sqlite")]
+    #[cfg(not(any(feature = "mysql", feature = "postgres")))]
     fn rdb_url(&self) -> String {
         if self.url.starts_with("sqlite") {
             self.url.clone()
@@ -204,12 +196,12 @@ fn url_test() {
     };
     #[cfg(feature = "mysql")]
     assert_eq!(conf.rdb_url(), "mysql://hoge_user:pass@127.0.0.1:1111/db");
-    #[cfg(feature = "postgres")]
+    #[cfg(all(feature = "postgres", not(feature = "mysql")))]
     assert_eq!(
         conf.rdb_url(),
         "postgres://hoge_user:pass@127.0.0.1:1111/db"
     );
-    #[cfg(feature = "sqlite")]
+    #[cfg(not(any(feature = "mysql", feature = "postgres")))]
     assert_eq!(conf.rdb_url(), "sqlite://db");
 }
 
@@ -281,7 +273,7 @@ impl RdbConfigTrait for RdbConfig {
     }
 }
 
-#[cfg(feature = "sqlite")]
+#[cfg(not(any(feature = "mysql", feature = "postgres")))]
 pub async fn new_rdb_pool(config: &RdbConfig, init_schema: Option<&String>) -> Result<RdbPool> {
     use anyhow::anyhow;
     use sqlx::{
@@ -313,7 +305,7 @@ pub async fn new_rdb_pool(config: &RdbConfig, init_schema: Option<&String>) -> R
     }
 }
 
-#[cfg(feature = "sqlite")]
+#[cfg(not(any(feature = "mysql", feature = "postgres")))]
 async fn setup_sqlite(p: &RdbPool, init_schema: Option<&String>) -> Result<()> {
     sqlx::query::<Rdb>("PRAGMA journal_mode = WAL;")
         .execute(p)
@@ -363,14 +355,14 @@ pub async fn new_rdb_pool(config: &RdbConfig, _sqlite_schema: Option<&String>) -
         ))
 }
 
-#[cfg(feature = "postgres")]
+#[cfg(all(feature = "postgres", not(feature = "mysql")))]
 pub async fn new_rdb_pool(config: &RdbConfig, _sqlite_schema: Option<&String>) -> Result<RdbPool> {
     // let port = config.port.parse::<u16>()?;
-    // from sqlx 0.7, mysql connection options not used (statement_cache_capacity)
+    // from sqlx 0.7, pgsql connection options not used (statement_cache_capacity)
     // ref. https://github.com/launchbadge/sqlx/issues/2773
 
     use sqlx::postgres::PgPoolOptions;
-    tracing::info!("new mysql pool: {}", config.rdb_url());
+    tracing::info!("new postgres pool: {}", config.rdb_url());
     let options: sqlx::postgres::PgConnectOptions = config
         .rdb_url()
         .parse()
@@ -391,7 +383,7 @@ pub async fn new_rdb_pool(config: &RdbConfig, _sqlite_schema: Option<&String>) -
         .connect_with(options)
         .await
         .context(format!(
-            "cannot initialize mysql connection:{:?}",
+            "cannot initialize postgres connection:{:?}",
             config.rdb_url()
         ))
 }
@@ -399,21 +391,21 @@ pub async fn new_rdb_pool(config: &RdbConfig, _sqlite_schema: Option<&String>) -
 pub mod query_result {
     #[cfg(feature = "mysql")]
     use sqlx::mysql::MySqlQueryResult;
-    #[cfg(feature = "postgres")]
+    #[cfg(all(feature = "postgres", not(feature = "mysql")))]
     use sqlx::postgres::PgQueryResult;
-    #[cfg(feature = "sqlite")]
+    #[cfg(not(any(feature = "mysql", feature = "postgres")))]
     use sqlx::sqlite::SqliteQueryResult;
 
     #[cfg(feature = "mysql")]
     pub fn last_insert_id(res: MySqlQueryResult) -> i64 {
         res.last_insert_id() as i64
     }
-    #[cfg(feature = "postgres")]
+    #[cfg(all(feature = "postgres", not(feature = "mysql")))]
     pub fn last_insert_id(res: PgQueryResult) -> i64 {
         // TODO not available in postgres
         0
     }
-    #[cfg(feature = "sqlite")]
+    #[cfg(not(any(feature = "mysql", feature = "postgres")))]
     pub fn last_insert_id(res: SqliteQueryResult) -> i64 {
         res.last_insert_rowid()
     }
@@ -430,7 +422,7 @@ pub trait UseRdbOption {
 pub mod test {
     // use std::time::Duration;
 
-    #[cfg(feature = "sqlite")]
+    #[cfg(not(any(feature = "mysql", feature = "postgres")))]
     #[sqlx::test]
     pub async fn test_sqlite() {
         use crate::infra::rdb::Rdb;
@@ -476,7 +468,7 @@ pub mod test {
             .map_err(|e| anyhow!("db error: {:?}", e));
         assert!(rows.is_ok());
     }
-    #[cfg(feature = "postgres")]
+    #[cfg(all(feature = "postgres", not(feature = "mysql")))]
     #[sqlx::test]
     pub async fn test_postgres() {
         use crate::infra::rdb::Rdb;

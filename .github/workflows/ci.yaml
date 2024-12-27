@@ -24,7 +24,7 @@ jobs:
       with:
         submodules: true
     - name: Set Toolchain
-      uses: dtolnay/rust-toolchain@master
+      uses: dtolnay/rust-toolchain@stable
       with:
         toolchain: stable
         components: rustfmt, clippy
@@ -78,6 +78,14 @@ jobs:
           - 7003:7003
           - 7004:7004
           - 7005:7005
+      postgres:
+        image: postgres:17
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_USER: 'postgres'
+          POSTGRES_PASSWORD: 'postgres'
+          POSTGRES_DB: 'test'
 
     steps:
     - name: Install last version of Protoc
@@ -97,13 +105,12 @@ jobs:
           ~/.cargo/git/db/
           target/
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-    - uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-    - uses: actions-rs/cargo@v1
-      with:
-        command: build
-        args: --release --all-features
-    - name: Run test
+    - uses: dtolnay/rust-toolchain@stable
+    - name: Run test (sqlite)
+      run: cargo test
+    - name: Run test (mysql)
+      run: cargo test --features mysql
+    - name: Run test (postgres)
+      run: cargo test --features postgres
+    - name: Run test all features
       run: cargo test --all-features
-
