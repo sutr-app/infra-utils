@@ -8,34 +8,40 @@ use std::time::Duration;
 
 #[cfg(feature = "mysql")]
 pub type Rdb = sqlx::MySql;
-#[cfg(not(feature = "mysql"))]
+#[cfg(feature = "sqlite")]
 pub type Rdb = sqlx::Sqlite;
+#[cfg(feature = "postgres")]
+pub type Rdb = sqlx::Postgres;
 
 #[cfg(feature = "mysql")]
 pub type RdbPool = sqlx::MySqlPool;
-#[cfg(not(feature = "mysql"))]
+#[cfg(feature = "sqlite")]
 pub type RdbPool = sqlx::SqlitePool;
+#[cfg(feature = "postgres")]
+pub type RdbPool = sqlx::PgPool;
 
 #[cfg(feature = "mysql")]
 pub type RdbTransaction<'a> = sqlx::Transaction<'a, sqlx::MySql>;
-#[cfg(not(feature = "mysql"))]
+#[cfg(feature = "sqlite")]
 pub type RdbTransaction<'a> = sqlx::Transaction<'a, sqlx::Sqlite>;
+#[cfg(feature = "postgres")]
+pub type RdbTransaction<'a> = sqlx::Transaction<'a, sqlx::Postgres>;
 
 #[cfg(feature = "mysql")]
 pub type RdbConnectOptions = sqlx::mysql::MySqlConnectOptions;
-#[cfg(not(feature = "mysql"))]
+#[cfg(feature = "sqlite")]
 pub type RdbConnectOptions = sqlx::sqlite::SqliteConnectOptions;
+#[cfg(feature = "postgres")]
+pub type RdbConnectOptions = sqlx::postgres::PgConnectOptions;
 
 #[cfg(feature = "mysql")]
 pub type RdbArguments = sqlx::mysql::MySqlArguments;
-#[cfg(not(feature = "mysql"))]
+#[cfg(feature = "sqlite")]
 pub type RdbArguments<'a> = sqlx::sqlite::SqliteArguments<'a>;
+#[cfg(feature = "postgres")]
+pub type RdbArguments = sqlx::postgres::PgArguments;
 
 pub trait RdbConfigTrait: Clone {
-    #[cfg(feature = "mysql")]
-    fn rdb_url(&self) -> String;
-    // TODO not implemeted for pgsql
-    #[cfg(not(feature = "mysql"))]
     fn rdb_url(&self) -> String;
 
     fn max_connections(&self) -> u32;
@@ -73,7 +79,14 @@ impl RdbConfigTrait for RdbConfigImpl {
             self.user, self.password, self.host, self.port, self.dbname
         )
     }
-    #[cfg(not(feature = "mysql"))]
+    #[cfg(feature = "postgres")]
+    fn rdb_url(&self) -> String {
+        format!(
+            "postgres://{}:{}@{}:{}/{}",
+            self.user, self.password, self.host, self.port, self.dbname
+        )
+    }
+    #[cfg(feature = "sqlite")]
     fn rdb_url(&self) -> String {
         format!("sqlite://{}", self.dbname)
     }
@@ -83,6 +96,7 @@ impl RdbConfigTrait for RdbConfigImpl {
 }
 
 impl Default for RdbConfigImpl {
+    #[cfg(feature = "sqlite")]
     fn default() -> Self {
         tracing::info!("Use default RdbConfig (sqlite3).");
         RdbConfigImpl {
@@ -91,6 +105,30 @@ impl Default for RdbConfigImpl {
             user: "".to_string(),
             password: "".to_string(),
             dbname: "jobworkerp.sqlite3".to_string(),
+            max_connections: 20,
+        }
+    }
+    #[cfg(feature = "mysql")]
+    fn default() -> Self {
+        tracing::info!("Use default RdbConfig (mysql).");
+        RdbConfigImpl {
+            host: "127.0.0.1".to_string(),
+            port: "3306".to_string(),
+            user: "mysql".to_string(),
+            password: "mysql".to_string(),
+            dbname: "jobworker".to_string(),
+            max_connections: 20,
+        }
+    }
+    #[cfg(feature = "postgres")]
+    fn default() -> Self {
+        tracing::info!("Use default RdbConfig (postgres).");
+        RdbConfigImpl {
+            host: "127.0.0.1".to_string(),
+            port: "5432".to_string(),
+            user: "mysql".to_string(),
+            password: "mysql".to_string(),
+            dbname: "jobworker".to_string(),
             max_connections: 20,
         }
     }
@@ -111,7 +149,15 @@ impl RdbConfigTrait for RdbUrlConfigImpl {
             "".to_string()
         }
     }
-    #[cfg(not(feature = "mysql"))]
+    #[cfg(feature = "postgres")]
+    fn rdb_url(&self) -> String {
+        if self.url.starts_with("postgres") {
+            self.url.clone()
+        } else {
+            "".to_string()
+        }
+    }
+    #[cfg(feature = "sqlite")]
     fn rdb_url(&self) -> String {
         if self.url.starts_with("sqlite") {
             self.url.clone()
@@ -146,8 +192,13 @@ fn url_test() {
     };
     #[cfg(feature = "mysql")]
     assert_eq!(conf.rdb_url(), "mysql://hoge_user:pass@127.0.0.1:1111/db");
-    #[cfg(not(feature = "mysql"))]
-    assert_eq!(conf.rdb_url(), "sqlite://db")
+    #[cfg(feature = "postgres")]
+    assert_eq!(
+        conf.rdb_url(),
+        "postgres://hoge_user:pass@127.0.0.1:1111/db"
+    );
+    #[cfg(feature = "sqlite")]
+    assert_eq!(conf.rdb_url(), "sqlite://db");
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -218,7 +269,7 @@ impl RdbConfigTrait for RdbConfig {
     }
 }
 
-#[cfg(not(feature = "mysql"))]
+#[cfg(feature = "sqlite")]
 pub async fn new_rdb_pool(config: &RdbConfig, init_schema: Option<&String>) -> Result<RdbPool> {
     use anyhow::anyhow;
     use sqlx::{
@@ -250,7 +301,7 @@ pub async fn new_rdb_pool(config: &RdbConfig, init_schema: Option<&String>) -> R
     }
 }
 
-#[cfg(not(feature = "mysql"))]
+#[cfg(feature = "sqlite")]
 async fn setup_sqlite(p: &RdbPool, init_schema: Option<&String>) -> Result<()> {
     sqlx::query::<Rdb>("PRAGMA journal_mode = WAL;")
         .execute(p)
@@ -300,17 +351,57 @@ pub async fn new_rdb_pool(config: &RdbConfig, _sqlite_schema: Option<&String>) -
         ))
 }
 
+#[cfg(feature = "postgres")]
+pub async fn new_rdb_pool(config: &RdbConfig, _sqlite_schema: Option<&String>) -> Result<RdbPool> {
+    // let port = config.port.parse::<u16>()?;
+    // from sqlx 0.7, mysql connection options not used (statement_cache_capacity)
+    // ref. https://github.com/launchbadge/sqlx/issues/2773
+
+    use sqlx::postgres::PgPoolOptions;
+    tracing::info!("new mysql pool: {}", config.rdb_url());
+    let options: sqlx::postgres::PgConnectOptions = config
+        .rdb_url()
+        .parse()
+        .context(format!("cannot parse url: {:?}", config.rdb_url()))?;
+
+    let options = options
+        .log_statements(LevelFilter::Debug)
+        .log_slow_statements(LevelFilter::Warn, Duration::from_secs(1));
+
+    // TODO set from config
+    PgPoolOptions::new()
+        .idle_timeout(Some(Duration::from_secs(10 * 60)))
+        .max_lifetime(Some(Duration::from_secs(10 * 60))) // same as mariadb server wait_timeout
+        .acquire_timeout(Duration::from_secs(5))
+        // .test_before_acquire(false)
+        .max_connections(config.max_connections())
+        // .min_connections(config.max_connections() / 5 + 1)
+        .connect_with(options)
+        .await
+        .context(format!(
+            "cannot initialize mysql connection:{:?}",
+            config.rdb_url()
+        ))
+}
+
 pub mod query_result {
     #[cfg(feature = "mysql")]
     use sqlx::mysql::MySqlQueryResult;
-    #[cfg(not(feature = "mysql"))]
+    #[cfg(feature = "postgres")]
+    use sqlx::postgres::PgQueryResult;
+    #[cfg(feature = "sqlite")]
     use sqlx::sqlite::SqliteQueryResult;
 
     #[cfg(feature = "mysql")]
     pub fn last_insert_id(res: MySqlQueryResult) -> i64 {
         res.last_insert_id() as i64
     }
-    #[cfg(not(feature = "mysql"))]
+    #[cfg(feature = "postgres")]
+    pub fn last_insert_id(res: PgQueryResult) -> i64 {
+        // TODO not available in postgres
+        0
+    }
+    #[cfg(feature = "sqlite")]
     pub fn last_insert_id(res: SqliteQueryResult) -> i64 {
         res.last_insert_rowid()
     }
@@ -327,7 +418,7 @@ pub trait UseRdbOption {
 pub mod test {
     // use std::time::Duration;
 
-    #[cfg(not(feature = "mysql"))]
+    #[cfg(feature = "sqlite")]
     #[sqlx::test]
     pub async fn test_sqlite() {
         use crate::infra::rdb::Rdb;
@@ -365,6 +456,23 @@ pub mod test {
         sqlx::any::install_default_drivers();
         // connection test for localhost
         let pool = crate::infra::rdb::new_rdb_pool(&crate::infra::test::MYSQL_CONFIG, None)
+            .await
+            .unwrap();
+        let rows = sqlx::query::<Rdb>("SELECT 1 as one")
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| anyhow!("db error: {:?}", e));
+        assert!(rows.is_ok());
+    }
+    #[cfg(feature = "postgres")]
+    #[sqlx::test]
+    pub async fn test_postgres() {
+        use crate::infra::rdb::Rdb;
+        use anyhow::anyhow;
+
+        sqlx::any::install_default_drivers();
+        // connection test for localhost
+        let pool = crate::infra::rdb::new_rdb_pool(&crate::infra::test::POSTGRES_CONFIG, None)
             .await
             .unwrap();
         let rows = sqlx::query::<Rdb>("SELECT 1 as one")
