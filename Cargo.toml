@@ -46,7 +46,6 @@ serde_with = "3.0"
 sqlx = { version = "0.7", features = [
     "runtime-tokio",
     "tls-rustls",
-    "sqlite",
     "chrono",
 ] }
 stretto = { version = "0.8", features = ["async"] }
@@ -72,8 +71,9 @@ unicode-normalization = "0.1"
 itertools = "0.13"
 
 [features]
-default = []
+default = ["sqlx/sqlite"]
 redis-test = []
 redis-cluster-test = []
-# use mysql instead of sqlite
+# must be enabled at least one of the following features to use sqlx
 mysql = ["sqlx/mysql"]
+postgres = ["sqlx/postgres"]

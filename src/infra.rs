@@ -29,6 +29,8 @@ pub mod test {
     pub async fn setup_test_rdb() -> &'static RdbPool {
         if cfg!(feature = "mysql") {
             setup_test_rdb_from::<&str>("sql/mysql").await
+        } else if cfg!(all(feature = "postgres", not(feature = "mysql"))) {
+            setup_test_rdb_from::<&str>("sql/postgres").await
         } else {
             setup_test_rdb_from::<&str>("sql/sqlite").await
         }
@@ -88,10 +90,64 @@ pub mod test {
             .expect("truncate all tables");
     }
 
-    #[cfg(not(feature = "mysql"))]
+    // migrate once in initialization
+    #[cfg(all(feature = "postgres", not(feature = "mysql")))]
+    static POSTGRES_INIT: OnceCell<RdbPool> = OnceCell::const_new();
+
+    #[cfg(all(feature = "postgres", not(feature = "mysql")))]
+    pub static POSTGRES_CONFIG: Lazy<RdbConfig> = Lazy::new(|| {
+        //let host = std::env::var("TEST_POSTGRES_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+        //RdbConfig::new(
+        //    host,
+        //    "3306".to_string(),
+        //    "postgres".to_string(),
+        //    "postgres".to_string(),
+        //    "test".to_string(),
+        //    20,
+        //)
+        RdbConfig::new_by_url(
+            std::env::var("TEST_POSTGRES_URL")
+                .unwrap_or_else(|_| "postgres://postgres:postgres@127.0.0.1:5432/test".to_string())
+                .as_str(),
+            20,
+        )
+    });
+
+    #[cfg(all(feature = "postgres", not(feature = "mysql")))]
+    pub async fn setup_test_rdb_from<T: Into<String>>(dir: T) -> &'static RdbPool {
+        POSTGRES_INIT
+            .get_or_init(|| async {
+                let pool = crate::infra::rdb::new_rdb_pool(&POSTGRES_CONFIG, None)
+                    .await
+                    .unwrap();
+                Migrator::new(std::path::Path::new(&dir.into()))
+                    .await
+                    .unwrap()
+                    .run(&pool)
+                    .await
+                    .unwrap();
+                pool
+            })
+            .await
+    }
+
+    #[cfg(all(feature = "postgres", not(feature = "mysql")))]
+    pub async fn truncate_tables(pool: &RdbPool, tables: Vec<&str>) {
+        let sql = tables
+            .iter()
+            .map(|t| format!("TRUNCATE TABLE {};", t))
+            .collect::<Vec<String>>()
+            .join(" ");
+        sqlx::raw_sql(sql.as_str())
+            .execute(pool)
+            .await
+            .expect("truncate all tables");
+    }
+
+    #[cfg(not(any(feature = "mysql", feature = "postgres")))]
     static SQLITE_INIT: OnceCell<RdbPool> = OnceCell::const_new();
 
-    #[cfg(not(feature = "mysql"))]
+    #[cfg(not(any(feature = "mysql", feature = "postgres")))]
     pub static SQLITE_CONFIG: Lazy<RdbConfig> = Lazy::new(|| {
         RdbConfig::new(
             "".to_string(),
@@ -103,7 +159,7 @@ pub mod test {
         )
     });
 
-    #[cfg(not(feature = "mysql"))]
+    #[cfg(not(any(feature = "mysql", feature = "postgres")))]
     pub async fn setup_test_rdb_from<T: Into<String>>(dir: T) -> &'static RdbPool {
         use command_utils::util::result::TapErr;
 
@@ -117,7 +173,7 @@ pub mod test {
             .await
     }
 
-    #[cfg(not(feature = "mysql"))]
+    #[cfg(not(any(feature = "mysql", feature = "postgres")))]
     async fn _setup_sqlite_internal<T: Into<String>>(dir: T) -> Result<RdbPool> {
         let pool = crate::infra::rdb::new_rdb_pool(&SQLITE_CONFIG, None).await?;
         Migrator::new(std::path::Path::new(&dir.into()))
@@ -127,7 +183,7 @@ pub mod test {
         Ok(pool)
     }
 
-    #[cfg(not(feature = "mysql"))]
+    #[cfg(not(any(feature = "mysql", feature = "postgres")))]
     pub async fn truncate_tables(pool: &RdbPool, tables: Vec<&str>) {
         let sql = tables
             .iter()
