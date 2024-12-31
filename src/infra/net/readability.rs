@@ -21,7 +21,7 @@ fn robots_txt_url(url_str: &str) -> Result<Url> {
 
 pub async fn get_robots_txt(
     url_str: &str,
-    user_agent: Option<&String>,
+    user_agent: Option<&str>,
     timeout: Option<Duration>,
 ) -> Result<Option<String>> {
     let robots_url = robots_txt_url(url_str)?;
@@ -56,7 +56,7 @@ fn available_url_by_robots_txt(robots_txt: &str, url: &str, user_agent: &str) ->
 
 pub async fn readable_by_robots_txt(
     url_str: &str,
-    user_agent: Option<&String>,
+    user_agent: Option<&str>,
 ) -> Result<Option<bool>> {
     let url = Url::parse(url_str)?;
     let robots_txt = get_robots_txt(url_str, user_agent, None).await?;
@@ -71,7 +71,7 @@ pub async fn readable_by_robots_txt(
 
 pub async fn request_to_utf8(
     url: &str,
-    user_agent: Option<&String>,
+    user_agent: Option<&str>,
     check_robotstxt: bool,
 ) -> Result<Product> {
     if check_robotstxt {
@@ -97,7 +97,7 @@ pub async fn request_to_utf8(
 pub async fn request_by_webdriver(
     webdriver: &WebDriverWrapper,
     url: &str,
-    user_agent: Option<&String>,
+    user_agent: Option<&str>,
     check_robotstxt: bool,
 ) -> Result<Product> {
     if check_robotstxt {

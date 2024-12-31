@@ -288,7 +288,7 @@ pub async fn new_rdb_pool(config: &RdbConfig, init_schema: Option<&String>) -> R
     }
     let options = SqliteConnectOptions::from_url(&url::Url::parse(&config.rdb_url())?)?
         .log_statements(LevelFilter::Trace)
-        .log_slow_statements(LevelFilter::Warn, Duration::from_secs(1));
+        .log_slow_statements(LevelFilter::Warn, Duration::from_secs(1)); // TODO set from config
 
     let pr = SqlitePoolOptions::new()
         .max_connections(config.max_connections())
@@ -329,7 +329,7 @@ pub async fn new_rdb_pool(config: &RdbConfig, _sqlite_schema: Option<&String>) -
     // ref. https://github.com/launchbadge/sqlx/issues/2773
 
     use sqlx::mysql::MySqlPoolOptions;
-    tracing::info!("new mysql pool: {}", config.rdb_url());
+    tracing::debug!("new mysql pool: {}", config.rdb_url());
     let options: sqlx::mysql::MySqlConnectOptions = config
         .rdb_url()
         .parse()
@@ -337,7 +337,7 @@ pub async fn new_rdb_pool(config: &RdbConfig, _sqlite_schema: Option<&String>) -
 
     let options = options
         .log_statements(LevelFilter::Debug)
-        .log_slow_statements(LevelFilter::Warn, Duration::from_secs(1));
+        .log_slow_statements(LevelFilter::Warn, Duration::from_secs(1)); // TODO set from config
 
     // TODO set from config
     MySqlPoolOptions::new()
@@ -362,7 +362,7 @@ pub async fn new_rdb_pool(config: &RdbConfig, _sqlite_schema: Option<&String>) -
     // ref. https://github.com/launchbadge/sqlx/issues/2773
 
     use sqlx::postgres::PgPoolOptions;
-    tracing::info!("new postgres pool: {}", config.rdb_url());
+    tracing::debug!("new postgres pool: {}", config.rdb_url());
     let options: sqlx::postgres::PgConnectOptions = config
         .rdb_url()
         .parse()
@@ -370,13 +370,13 @@ pub async fn new_rdb_pool(config: &RdbConfig, _sqlite_schema: Option<&String>) -
 
     let options = options
         .log_statements(LevelFilter::Debug)
-        .log_slow_statements(LevelFilter::Warn, Duration::from_secs(1));
+        .log_slow_statements(LevelFilter::Warn, Duration::from_secs(20)); // TODO set from config
 
     // TODO set from config
     PgPoolOptions::new()
-        .idle_timeout(Some(Duration::from_secs(10 * 60)))
-        .max_lifetime(Some(Duration::from_secs(10 * 60))) // same as mariadb server wait_timeout
-        .acquire_timeout(Duration::from_secs(5))
+        .idle_timeout(Some(Duration::from_secs(10 * 60))) // TODO set from config
+        .max_lifetime(Some(Duration::from_secs(10 * 60))) // TODO set from config
+        .acquire_timeout(Duration::from_secs(10))
         // .test_before_acquire(false)
         .max_connections(config.max_connections())
         // .min_connections(config.max_connections() / 5 + 1)

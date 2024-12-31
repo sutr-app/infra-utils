@@ -10,7 +10,7 @@ pub struct ReqwestClient {
 }
 impl ReqwestClient {
     pub fn new(
-        user_agent: Option<&String>,
+        user_agent: Option<&str>,
         timeout: Option<Duration>,
         retry: Option<u32>,
     ) -> Result<Self> {
