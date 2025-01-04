@@ -401,7 +401,7 @@ pub mod query_result {
         res.last_insert_id() as i64
     }
     #[cfg(all(feature = "postgres", not(feature = "mysql")))]
-    pub fn last_insert_id(res: PgQueryResult) -> i64 {
+    pub fn last_insert_id(_res: PgQueryResult) -> i64 {
         // TODO not available in postgres
         0
     }

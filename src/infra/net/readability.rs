@@ -61,11 +61,7 @@ pub async fn readable_by_robots_txt(
     let url = Url::parse(url_str)?;
     let robots_txt = get_robots_txt(url_str, user_agent, None).await?;
     Ok(robots_txt.map(|t| {
-        available_url_by_robots_txt(
-            t.as_str(),
-            url.as_str(),
-            user_agent.unwrap_or(&"robotstxt".to_string()),
-        )
+        available_url_by_robots_txt(t.as_str(), url.as_str(), user_agent.unwrap_or("robotstxt"))
     }))
 }
 
