@@ -88,6 +88,44 @@ where
             })
             .unwrap_or(()); // XXX ignore error
     }
+    async fn with_cache_if_some<R, F>(
+        &self,
+        key: &KEY,
+        ttl: Option<&Duration>,
+        not_found_case: F,
+    ) -> Result<Option<VAL>>
+    where
+        Self: Send + Sync,
+        R: Future<Output = Result<Option<VAL>>> + Send,
+        F: FnOnce() -> R + Send,
+    {
+        match self.find_cache(key).await {
+            Some(r) => Ok(Some(r)),
+            None => {
+                tracing::trace!(
+                    "memory cache not found: {:?}, create by not_found_case",
+                    key
+                );
+                let v = not_found_case().await;
+                match v {
+                    Ok(Some(r)) => {
+                        self.set_and_wait_cache(
+                            (*key).clone(),
+                            r.clone(),
+                            ttl.or(self.default_ttl()),
+                        )
+                        .await;
+                        Ok(Some(r))
+                    }
+                    Ok(None) => Ok(None),
+                    Err(e) => {
+                        tracing::warn!("cache error: key={:?}, err: {:?}", key, e);
+                        Err(e)
+                    }
+                }
+            }
+        }
+    }
 
     // with concurrent lock (anti-stampede)
     async fn with_cache_locked<R, F>(
