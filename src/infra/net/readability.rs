@@ -6,10 +6,21 @@ use robotstxt::DefaultMatcher;
 use std::{borrow::BorrowMut, io::Cursor, time::Duration};
 use url::Url;
 
+use crate::infra::memory::{MemoryCacheConfig, MemoryCacheImpl, UseMemoryCache};
+
 use super::{
     reqwest::ReqwestClient,
     webdriver::{UseWebDriver, WebDriverWrapper},
 };
+
+static MEMORY_CACHE: once_cell::sync::Lazy<MemoryCacheImpl<String, Option<String>>> =
+    once_cell::sync::Lazy::new(|| {
+        let conf = MemoryCacheConfig::default();
+        MemoryCacheImpl::<String, Option<String>>::new(
+            &conf,
+            Some(Duration::from_secs(60 * 60 * 24)),
+        )
+    });
 
 fn robots_txt_url(url_str: &str) -> Result<Url> {
     let mut url = Url::parse(url_str)?;
@@ -25,27 +36,50 @@ pub async fn get_robots_txt(
     timeout: Option<Duration>,
 ) -> Result<Option<String>> {
     let robots_url = robots_txt_url(url_str)?;
-    let client = reqwest::Client::builder()
-        .timeout(timeout.unwrap_or_else(|| Duration::new(30, 0)))
-        .connect_timeout(timeout.unwrap_or_else(|| Duration::new(30, 0)));
-    let client = if let Some(ua) = user_agent {
-        client.user_agent(ua).build()?
-    } else {
-        client.build()?
-    };
+    MEMORY_CACHE
+        .with_cache_locked(
+            &robots_url.as_str().to_string(),
+            Some(&Duration::from_secs(60 * 60 * 24)),
+            || async {
+                // cache test to ses
+                // println!("========= request to robots.txt: {}", robots_url);
+                let client = reqwest::Client::builder()
+                    .timeout(timeout.unwrap_or_else(|| Duration::new(30, 0)))
+                    .connect_timeout(timeout.unwrap_or_else(|| Duration::new(30, 0)));
+                let client = if let Some(ua) = user_agent {
+                    client.user_agent(ua).build()?
+                } else {
+                    client.build()?
+                };
 
-    let res = client.get(robots_url.as_str()).send().await?;
-    if res.status().is_success() {
-        let txt = res
-            .text()
-            .await
-            .map_err(|e| anyhow!("content error: {:?}", e))?;
-        Ok(Some(txt))
-    } else if res.status() == StatusCode::NOT_FOUND {
-        Ok(None)
-    } else {
-        Err(anyhow!("robot_txt request not success: {:?}", res))
-    }
+                let res = client.get(robots_url.as_str()).send().await?;
+                if res.status().is_success() {
+                    let txt = res
+                        .text()
+                        .await
+                        .map_err(|e| anyhow!("content error: {:?}", e))?;
+                    Ok(Some(txt))
+                } else if res.status() == StatusCode::NOT_FOUND {
+                    Ok(None)
+                } else {
+                    Err(anyhow!("robot_txt request not success: {:?}", res))
+                }
+                // let client = ReqwestClient::new(user_agent, Some(Duration::new(30, 0)), Some(2))?;
+                // let res = client.client().get(robots_url.as_str()).send().await?;
+                // if res.status().is_success() {
+                //     let txt = res
+                //         .text()
+                //         .await
+                //         .map_err(|e| anyhow!("content error: {:?}", e))?;
+                //     Ok(Some(txt))
+                // } else if res.status() == StatusCode::NOT_FOUND {
+                //     Ok(None)
+                // } else {
+                //     Err(anyhow!("robot_txt request not success: {:?}", res))
+                // }
+            },
+        )
+        .await
 }
 
 // TODO make struct, with caching
@@ -119,4 +153,64 @@ pub async fn request_by_webdriver(
     } else {
         Err(anyhow!("request not success: {:?}", status.message))
     }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[ignore]
+    #[tokio::test]
+    async fn test_request_euc() {
+        // euc-jp
+        let url = "https://www.4gamer.net/games/535/G053589/20240105025/";
+        let result = request_to_utf8(url, Some("Request/1.0"), true)
+            .await
+            .unwrap();
+        println!("==== title: {}", &result.title);
+        println!("=== text: {}", &result.text);
+        println!("=== content: {}", &result.content);
+        println!("=== url: {}", &url);
+        assert!(!result.text.is_empty());
+    }
+
+    #[test]
+    fn test_robots_txt_url() {
+        assert_eq!(
+            robots_txt_url("https://www.example.com").unwrap().as_str(),
+            "https://www.example.com/robots.txt"
+        );
+        assert_eq!(
+            robots_txt_url("https://www.example.com/search?hoge=fuga")
+                .unwrap()
+                .as_str(),
+            "https://www.example.com/robots.txt"
+        );
+        assert_eq!(
+            robots_txt_url("https://www.example.com/search/?hoge=fuga#id")
+                .unwrap()
+                .as_str(),
+            "https://www.example.com/robots.txt"
+        );
+    }
+    // #[ignore = "need to setup test server"]
+    // #[tokio::test]
+    // async fn test_get_robots_txt() {
+    //     let url = "https://www.yahoo.co.jp";
+    //     let txt = get_robots_txt(url, Some("Request/1.0"), Some(Duration::new(30, 0)))
+    //         .await
+    //         .unwrap();
+    //     println!("robots.txt: {:?}", txt);
+    //     assert!(txt.is_some());
+    //     let txt = get_robots_txt(url, Some("Request/1.0"), Some(Duration::new(30, 0)))
+    //         .await
+    //         .unwrap();
+    //     println!("robots.txt2: {:?}", txt);
+    //     assert!(txt.is_some());
+    //     let txt = get_robots_txt(url, Some("Request/1.0"), Some(Duration::new(30, 0)))
+    //         .await
+    //         .unwrap();
+    //     println!("robots.txt3: {:?}", txt);
+    //     assert!(txt.is_some());
+    // }
 }
