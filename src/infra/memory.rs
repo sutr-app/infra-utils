@@ -64,7 +64,11 @@ where
         Self: Send + Sync,
     {
         let r = self.set_cache(key, value, ttl).await;
-        self.cache().wait().await.unwrap_or(()); // XXX ignore error
+        self.cache()
+            .wait()
+            .await
+            .inspect_err(|e| tracing::warn!("cache wait error?: err: {}", e))
+            .unwrap_or(()); // XXX ignore error
         r
     }
 
@@ -75,7 +79,11 @@ where
     {
         let _lock = self.key_lock().write(key.clone()).await;
         let r = self.set_cache(key, value, ttl).await;
-        self.cache().wait().await.unwrap_or(()); // XXX ignore error
+        self.cache()
+            .wait()
+            .await
+            .inspect_err(|e| tracing::warn!("cache wait error?: err: {}", e))
+            .unwrap_or(()); // XXX ignore error
         r
     }
 
@@ -83,9 +91,7 @@ where
         self.cache()
             .wait()
             .await
-            .map_err(move |e| {
-                tracing::warn!("cache wait error?: err: {}", e);
-            })
+            .inspect_err(|e| tracing::warn!("cache wait error?: err: {}", e))
             .unwrap_or(()); // XXX ignore error
     }
     async fn with_cache_if_some<R, F>(
