@@ -13,8 +13,8 @@ pub struct BroadcastChan<T: Send + Sync + Clone> {
     pub key_set: Arc<Mutex<HashSet<String>>>,
 }
 impl<T: Send + Sync + Clone> BroadcastChan<T> {
-    // 6MB
-    const DEFAULT_BUF_SIZE: usize = 6_000_000;
+    // 32MB
+    const DEFAULT_BUF_SIZE: usize = 32_000_000;
     pub fn new(capacity: usize) -> Self {
         let (sender, _) = broadcast::channel(capacity);
         let sref = Arc::new(sender);

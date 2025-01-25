@@ -1,5 +1,9 @@
 use anyhow::{anyhow, Result};
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::sync::Mutex;
 
 use super::{ChanBuffer, ChanBufferItem, ChanTrait};
@@ -82,7 +86,11 @@ impl<T: Send + Sync + Clone + std::fmt::Debug> ChanTrait<T> for Chan<T> {
 
 pub trait UseChanBuffer {
     type Item: Send + Sync + Clone + std::fmt::Debug;
+    type BufItem: Send + Sync + Clone + std::fmt::Debug;
+
     fn chan_buf(&self) -> &ChanBuffer<Self::Item, Chan<ChanBufferItem<Self::Item>>>;
+    // for listing all items
+    fn shared_buffer(&self) -> &Mutex<HashMap<String, Vec<Self::BufItem>>>;
 }
 
 #[cfg(test)]
@@ -95,12 +103,17 @@ mod tests {
     #[derive(Clone)]
     struct Test {
         pub chan_buf: ChanBuffer<Vec<u8>, Chan<ChanBufferItem<Vec<u8>>>>,
+        pub shared_buffer: Arc<Mutex<HashMap<String, Vec<Vec<u8>>>>>,
     }
 
     impl UseChanBuffer for Test {
         type Item = Vec<u8>;
+        type BufItem = Vec<u8>;
         fn chan_buf(&self) -> &ChanBuffer<Vec<u8>, Chan<ChanBufferItem<Vec<u8>>>> {
             &self.chan_buf
+        }
+        fn shared_buffer(&self) -> &Mutex<HashMap<String, Vec<Vec<u8>>>> {
+            &self.shared_buffer
         }
     }
 
@@ -108,6 +121,7 @@ mod tests {
     async fn test_use_chan_buf() {
         let test = Test {
             chan_buf: ChanBuffer::new(None, 10000),
+            shared_buffer: Arc::new(Mutex::new(HashMap::new())),
         };
         let key = "test_key";
         let data = b"test".to_vec();
@@ -130,6 +144,7 @@ mod tests {
     async fn test_duplicate_key() {
         let test = Test {
             chan_buf: ChanBuffer::new(None, 10000),
+            shared_buffer: Arc::new(Mutex::new(HashMap::new())),
         };
         let key = "test";
         let data = b"test".to_vec();
@@ -148,6 +163,7 @@ mod tests {
     async fn test_chan_buf_multi_thread() {
         let test = Test {
             chan_buf: ChanBuffer::new(None, 10000),
+            shared_buffer: Arc::new(Mutex::new(HashMap::new())),
         };
         let test_clone = test.clone();
         let key = "test_key";
@@ -173,6 +189,7 @@ mod tests {
     async fn test_chan_buf_recv_timeout() {
         let test = Test {
             chan_buf: ChanBuffer::new(None, 10000),
+            shared_buffer: Arc::new(Mutex::new(HashMap::new())),
         };
         let test_clone = test.clone();
         let key = "test_key";

@@ -19,6 +19,8 @@ pub mod test {
 
     // destroy runtime, destroy connection pool, so use as static in all test
     // ref. https://qiita.com/autotaker1984/items/d0ae2d7feb148ffb8989
+    // ref. https://github.com/launchbadge/sqlx/issues/2881
+    // ref. https://github.com/kingwingfly/share_runtime_example
     pub static TEST_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
