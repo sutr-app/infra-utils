@@ -10,11 +10,8 @@ pub struct GrpcConnection {
 }
 
 impl GrpcConnection {
-    pub async fn new(
-        addr: String,
-        request_timeout: Option<Duration>,
-        use_tls: bool,
-    ) -> Result<Self> {
+    pub async fn new(addr: String, request_timeout: Option<Duration>) -> Result<Self> {
+        let use_tls: bool = addr.as_str().starts_with("https://");
         let endpoint = if let Some(timeout) = request_timeout {
             Endpoint::try_from(addr.clone())?.timeout(timeout)
         } else {
