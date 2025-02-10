@@ -38,7 +38,7 @@ impl<T: Send + Sync + Clone> Chan<T> {
         self.rx.receiver_count()
     }
 }
-impl<T: Send + Sync + Clone + std::fmt::Debug> ChanTrait<T> for Chan<T> {
+impl<T: Send + Sync + Clone + std::fmt::Debug + 'static> ChanTrait<T> for Chan<T> {
     fn new(buf_size: Option<usize>) -> Self {
         Chan::new(buf_size)
     }
@@ -64,6 +64,29 @@ impl<T: Send + Sync + Clone + std::fmt::Debug> ChanTrait<T> for Chan<T> {
                 .map_err(|e| anyhow!("chan recv error: {:?}", e))
         }
     }
+    async fn receive_stream_from_chan(
+        &self,
+        recv_timeout: Option<Duration>,
+    ) -> Result<futures::stream::BoxStream<'static, T>>
+    where
+        T: 'static,
+    {
+        let rx = self.rx.clone();
+        let stream = futures::stream::unfold(rx, move |rx| async move {
+            if let Some(dur) = recv_timeout {
+                match tokio::time::timeout(dur, rx.recv_async()).await {
+                    Ok(Ok(item)) => Some((item, rx)),
+                    _ => None,
+                }
+            } else {
+                match rx.recv_async().await {
+                    Ok(item) => Some((item, rx)),
+                    Err(_) => None,
+                }
+            }
+        });
+        Ok(Box::pin(stream))
+    }
 
     async fn try_receive_from_chan(&self) -> Result<T> {
         self.rx
@@ -82,6 +105,7 @@ impl<T: Send + Sync + Clone + std::fmt::Debug> ChanTrait<T> for Chan<T> {
 
 pub trait UseChanBuffer {
     type Item: Send + Sync + Clone + std::fmt::Debug;
+
     fn chan_buf(&self) -> &ChanBuffer<Self::Item, Chan<ChanBufferItem<Self::Item>>>;
 }
 

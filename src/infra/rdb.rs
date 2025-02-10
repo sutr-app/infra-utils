@@ -108,7 +108,7 @@ impl Default for RdbConfigImpl {
             port: "".to_string(),
             user: "".to_string(),
             password: "".to_string(),
-            dbname: "jobworkerp.sqlite3".to_string(),
+            dbname: "default.sqlite3".to_string(),
             max_connections: 20,
         }
     }
@@ -120,7 +120,7 @@ impl Default for RdbConfigImpl {
             port: "3306".to_string(),
             user: "mysql".to_string(),
             password: "mysql".to_string(),
-            dbname: "jobworker".to_string(),
+            dbname: "default".to_string(),
             max_connections: 20,
         }
     }
@@ -132,7 +132,7 @@ impl Default for RdbConfigImpl {
             port: "5432".to_string(),
             user: "mysql".to_string(),
             password: "mysql".to_string(),
-            dbname: "jobworker".to_string(),
+            dbname: "default".to_string(),
             max_connections: 20,
         }
     }
@@ -178,7 +178,7 @@ impl Default for RdbUrlConfigImpl {
     fn default() -> Self {
         tracing::info!("Use default RDBConfig (sqlite3).");
         RdbUrlConfigImpl {
-            url: "sqlite://jobworkerp.sqlite3".to_string(),
+            url: "sqlite://default.sqlite3".to_string(),
             max_connections: 20,
         }
     }

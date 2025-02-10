@@ -19,6 +19,8 @@ pub mod test {
 
     // destroy runtime, destroy connection pool, so use as static in all test
     // ref. https://qiita.com/autotaker1984/items/d0ae2d7feb148ffb8989
+    // ref. https://github.com/launchbadge/sqlx/issues/2881
+    // ref. https://github.com/kingwingfly/share_runtime_example
     pub static TEST_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -53,7 +55,7 @@ pub mod test {
         //)
         RdbConfig::new_by_url(
             std::env::var("TEST_MYSQL_URL")
-                .unwrap_or_else(|_| "mysql://mysql:mysql@127.0.0.1:3306/test".to_string())
+                .unwrap_or_else(|_| "mysql://maria:maria@127.0.0.1:3306/test".to_string())
                 .as_str(),
             20,
         )
