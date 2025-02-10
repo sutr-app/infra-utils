@@ -55,7 +55,7 @@ pub mod test {
         //)
         RdbConfig::new_by_url(
             std::env::var("TEST_MYSQL_URL")
-                .unwrap_or_else(|_| "mysql://mysql:mysql@127.0.0.1:3306/test".to_string())
+                .unwrap_or_else(|_| "mysql://maria:maria@127.0.0.1:3306/test".to_string())
                 .as_str(),
             20,
         )

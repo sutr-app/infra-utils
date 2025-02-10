@@ -3,11 +3,14 @@ use anyhow::Result;
 use deadpool_redis::redis::AsyncCommands as PoolAsyncCommands;
 use deadpool_redis::{Config, Connection, Pool, Runtime};
 use debug_stub_derive::DebugStub;
+use futures::stream::BoxStream;
 use redis::aio::MultiplexedConnection as RedisConnection;
 use redis::aio::PubSub;
 use redis::Client;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 #[derive(Deserialize, Clone, DebugStub)]
@@ -37,6 +40,14 @@ pub trait UseRedisClient: Send + Sync {
         }
     }
 
+    fn unsubscribe(&self, channel: &str) -> impl std::future::Future<Output = Result<()>> + Send {
+        async move {
+            let mut pubsub = self.redis_client().get_async_pubsub().await?;
+            pubsub.unsubscribe(channel).await?;
+            Ok(())
+        }
+    }
+
     fn psubscribe(
         &self,
         pchannel: &String,
@@ -62,6 +73,34 @@ pub trait UseRedisClient: Send + Sync {
                 .publish::<&str, &Vec<u8>, u32>(channel, message)
                 .await?;
             Ok(r)
+        }
+    }
+
+    fn publish_stream(
+        &self,
+        channel: &str,
+        mut message: BoxStream<Vec<u8>>,
+    ) -> impl std::future::Future<Output = Result<u32>> + Send {
+        async move {
+            tracing::debug!("publish_stream: {:?}", channel);
+            let mut conn = self
+                .redis_client()
+                .get_multiplexed_async_connection()
+                .await?;
+            let r = Arc::new(Mutex::new(0));
+            use futures::StreamExt;
+            while let Some(msg) = message.next().await {
+                let res = conn.publish::<&str, &Vec<u8>, u32>(channel, &msg).await;
+                tracing::debug!("published: {:?}", res);
+                if let Ok(n) = res {
+                    *r.lock().unwrap() += n;
+                }
+            }
+            let count = {
+                let guard = r.lock().unwrap();
+                *guard
+            };
+            Ok(count)
         }
     }
 
