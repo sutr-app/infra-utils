@@ -248,6 +248,7 @@ impl WebDriverPool {
 
 #[async_trait]
 pub trait WebScraper: UseWebDriver + Send + Sync {
+    const MAX_PAGE_NUM: i32 = 50;
     // catch scraping error and capture screenshot
     // TODO Unsafe境界のエラーで入れられていない...
     // async fn try_scraping<T, F>(&self, process: F) -> Result<T, WebDriverError>
@@ -436,7 +437,7 @@ pub trait WebScraper: UseWebDriver + Send + Sync {
             if let Some(next) = next_page_selector {
                 // ページ遷移して次のコンテンツを取得する
                 let r = self
-                    .goto_next_content(next, content_selector)
+                    .goto_next_content(next, content_selector, 1)
                     .await
                     .unwrap_or_else(|err| {
                         tracing::warn!("next page content not parse: {}", err);
@@ -455,6 +456,7 @@ pub trait WebScraper: UseWebDriver + Send + Sync {
         &self,
         next: &By,
         content_selector: &By,
+        page_num: i32,
     ) -> Result<Vec<String>, WebDriverError> {
         let next_ele = self.driver().find(next.clone()).await?;
         // XXX 次のページへのリンクはhrefで取得できる前提がある
@@ -470,14 +472,19 @@ pub trait WebScraper: UseWebDriver + Send + Sync {
             if con.is_empty() {
                 tracing::info!("empty page?");
                 Ok(vec![])
-            } else {
+            } else if page_num <= Self::MAX_PAGE_NUM {
                 // recursive call (next page while next href exists)
-                let ncon = self.goto_next_content(next, content_selector).await;
+                let ncon = self
+                    .goto_next_content(next, content_selector, page_num + 1)
+                    .await;
                 if let Ok(nc) = ncon {
                     Ok([vec![con], nc].concat())
                 } else {
                     Ok(vec![con])
                 }
+            } else {
+                tracing::warn!("over max page: {}", Self::MAX_PAGE_NUM);
+                Ok(vec![con])
             }
         } else {
             tracing::info!("page end");
