@@ -45,8 +45,8 @@ jobs:
           - 3306:3306
         env:
           MYSQL_HOST: 127.0.0.1
-          MYSQL_USER: mysql
-          MYSQL_PASSWORD: mysql
+          MYSQL_USER: maria
+          MYSQL_PASSWORD: maria
           MYSQL_DATABASE: test
           MYSQL_ROOT_PASSWORD: ""
           MYSQL_ALLOW_EMPTY_PASSWORD: yes
