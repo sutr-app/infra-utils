@@ -14,7 +14,7 @@ async-stream = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 command-utils = { git = "https://github.com/sutr-app/command-utils.git", branch = "main" }
 deadpool = { version = "0.12", features = ["rt_tokio_1"] }
-deadpool-redis = { version = "0.18", features = ["rt_tokio_1", "cluster"] }
+deadpool-redis = { version = "0.19", features = ["rt_tokio_1", "cluster"] }
 debug_stub_derive = "0.3"
 envy = "0.4"
 flume = { version = "0.11", default-features = false, features = [
@@ -27,9 +27,8 @@ log = "0.4"
 once_cell = "1.19"
 opentelemetry = { version = "0.27", features = ["metrics", "trace"] }
 readability = { version = "0.3" }
-redis = { version = "0.27", features = [
+redis = { version = "0.28", features = [
     "tokio-rustls-comp",
-    "r2d2",
     "ahash",
     "cluster-async",
 ] }
