@@ -324,7 +324,8 @@ pub trait WebScraper: UseWebDriver + Send + Sync {
                 .map_err(|e| {
                     tracing::warn!("error in parse_datetime: {:?}", &e);
                     WebDriverError::ParseError(format!("parse_datetime error: {:?}", e))
-                })?
+                })
+                .unwrap_or(None)
         } else {
             None
         };
@@ -335,12 +336,13 @@ pub trait WebScraper: UseWebDriver + Send + Sync {
                 .driver()
                 .find_all(tsel)
                 .await
-                .inspect_err(|e| tracing::warn!("error in scraping tags: {:?}", &e))?;
+                .inspect_err(|e| tracing::warn!("error in scraping tags: {:?}", &e))
+                .unwrap_or_default();
 
             let mut tags = Vec::new();
             for elem in tag_elems.iter() {
-                elem.wait_until().displayed().await?;
-                let tag = elem.text().await?;
+                elem.wait_until().displayed().await.unwrap_or_default();
+                let tag = elem.text().await.unwrap_or_default();
                 tags.push(tag);
             }
             tags
