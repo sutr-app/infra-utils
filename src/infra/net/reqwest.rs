@@ -5,6 +5,7 @@ use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use reqwest_tracing::TracingMiddleware;
 
+#[derive(Debug, Clone)]
 pub struct ReqwestClient {
     client: ClientWithMiddleware,
 }
