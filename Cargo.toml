@@ -54,11 +54,9 @@ sqlx = { version = "0.7", features = [
 stretto = { version = "0.8", features = ["async"] }
 strum = "0.27"
 strum_macros = "0.27"
-thirtyfour = "0.34"
+thirtyfour = { git = "https://github.com/sutr-app/thirtyfour.git", branch = "main" }
 tonic = { version = "0.12", features = ["tls", "tls-webpki-roots"] }
-tokio = { version = "1", features = [
-    "full",
-] }
+tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["full"] }
 tracing = "0.1"
 url = "2"
