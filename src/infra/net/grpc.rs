@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
+use prost::bytes::{Buf, BufMut};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::{RwLock, RwLockReadGuard};
+use tonic::codec::{Codec, DecodeBuf, Decoder, EncodeBuf, Encoder};
 use tonic::transport::{ClientTlsConfig, Endpoint};
 
 #[derive(Debug, Clone)]
@@ -40,5 +42,57 @@ impl GrpcConnection {
 
     pub async fn read_channel(&self) -> RwLockReadGuard<tonic::transport::Channel> {
         self.channel.read().await
+    }
+}
+
+// Define a custom codec that passes through raw bytes without additional protobuf encoding
+#[derive(Debug, Clone)]
+pub struct RawBytesCodec;
+
+impl Default for RawBytesCodec {
+    fn default() -> Self {
+        RawBytesCodec
+    }
+}
+
+impl Encoder for RawBytesCodec {
+    type Item = Vec<u8>;
+    type Error = tonic::Status;
+
+    fn encode(&mut self, item: Self::Item, buf: &mut EncodeBuf<'_>) -> Result<(), Self::Error> {
+        // Simply write the raw bytes as-is
+        buf.reserve(item.len());
+        buf.put_slice(&item);
+        Ok(())
+    }
+}
+
+impl Decoder for RawBytesCodec {
+    type Item = Vec<u8>;
+    type Error = tonic::Status;
+
+    fn decode(&mut self, buf: &mut DecodeBuf<'_>) -> Result<Option<Self::Item>, Self::Error> {
+        if !buf.has_remaining() {
+            return Ok(None);
+        }
+
+        // Just copy the entire buffer into a new Vec<u8>
+        let bytes = buf.copy_to_bytes(buf.remaining());
+        Ok(Some(bytes.to_vec()))
+    }
+}
+
+impl Codec for RawBytesCodec {
+    type Encode = Vec<u8>;
+    type Decode = Vec<u8>;
+    type Encoder = RawBytesCodec;
+    type Decoder = RawBytesCodec;
+
+    fn encoder(&mut self) -> Self::Encoder {
+        RawBytesCodec
+    }
+
+    fn decoder(&mut self) -> Self::Decoder {
+        RawBytesCodec
     }
 }
