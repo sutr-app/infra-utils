@@ -1,9 +1,17 @@
 use anyhow::{Context, Result};
 use prost::bytes::{Buf, BufMut};
+use std::convert::Infallible;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::{RwLock, RwLockReadGuard};
+use tonic::body::Body;
 use tonic::codec::{Codec, DecodeBuf, Decoder, EncodeBuf, Encoder};
+use tonic::server::NamedService;
+use tonic::service::LayerExt as _;
 use tonic::transport::{ClientTlsConfig, Endpoint};
+use tonic_web::GrpcWebService;
+use tower::Service;
+use tower_http::cors::Cors;
+use tower_http::cors::CorsLayer;
 
 #[derive(Debug, Clone)]
 pub struct GrpcConnection {
@@ -95,4 +103,22 @@ impl Codec for RawBytesCodec {
     fn decoder(&mut self) -> Self::Decoder {
         RawBytesCodec
     }
+}
+
+pub fn enable_grpc_web<S>(service: S) -> tonic::service::Layered<Cors<GrpcWebService<S>>, S>
+where
+    S: Service<axum::http::Request<Body>, Error = Infallible>
+        + NamedService
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    S::Response: axum::response::IntoResponse,
+    S::Future: Send + 'static,
+{
+    tower::ServiceBuilder::new()
+        .layer(CorsLayer::new())
+        .layer(tonic_web::GrpcWebLayer::new())
+        .into_inner()
+        .named_layer(service)
 }
