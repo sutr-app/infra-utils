@@ -11,6 +11,7 @@ edition = "2021"
 anyhow = "1.0"
 async-trait = "0.1"
 async-stream = "0.3"
+axum = { version = "0.8" }
 chrono = { version = "0.4", features = ["serde"] }
 command-utils = { git = "https://github.com/sutr-app/command-utils.git", branch = "main" }
 deadpool = { version = "0.12", features = ["rt_tokio_1"] }
@@ -26,6 +27,7 @@ itertools = "0.14"
 log = "0.4"
 once_cell = "1.19"
 opentelemetry = { version = "0.27", features = ["metrics", "trace"] }
+prost = "0.13"
 readability = { version = "0.3" }
 redis = { version = "0.28", features = [
     "tokio-rustls-comp",
@@ -55,9 +57,12 @@ stretto = { version = "0.8", features = ["async"] }
 strum = "0.27"
 strum_macros = "0.27"
 thirtyfour = { git = "https://github.com/sutr-app/thirtyfour.git", branch = "main" }
-tonic = { version = "0.12", features = ["tls", "tls-webpki-roots"] }
+tonic = { version = "0.13", features = ["tls-ring", "tls-webpki-roots"] }
+tonic-web = { version = "0.13" }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["full"] }
+tower = "0.5"
+tower-http = {version = "0.6", features = ["cors"]}
 tracing = "0.1"
 url = "2"
 unicode-normalization = "0.1"
