@@ -57,6 +57,7 @@ stretto = { version = "0.8", features = ["async"] }
 strum = "0.27"
 strum_macros = "0.27"
 thirtyfour = "0.34"
+thiserror = "2"
 tonic = { version = "0.13", features = ["tls-ring", "tls-webpki-roots"] }
 tonic-web = { version = "0.13" }
 tokio = { version = "1", features = [
