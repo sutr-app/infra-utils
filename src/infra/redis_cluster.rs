@@ -195,7 +195,6 @@ pub trait UseRedisClusterLock: UseRedisClusterPool + Send + Sync {
 mod test {
     use crate::infra::redis_cluster::{UseRedisClusterLock, UseRedisClusterPool};
     use anyhow::Result;
-    use command_utils::util::result::TapErr;
     use deadpool_redis::cluster::Pool;
     use redis::AsyncCommands;
     use serde::Deserialize;
@@ -230,7 +229,7 @@ mod test {
         };
         let mut cli = super::new_redis_cluster_connection(config)
             .await
-            .tap_err(|e| println!("error: {:?}", e))
+            .inspect_err(|e| println!("error: {:?}", e))
             .unwrap();
         cli.del::<&str, u32>("foo").await.unwrap();
         let v: Option<String> = cli.get("foo").await.unwrap();
