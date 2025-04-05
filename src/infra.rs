@@ -163,13 +163,11 @@ pub mod test {
 
     #[cfg(not(any(feature = "mysql", feature = "postgres")))]
     pub async fn setup_test_rdb_from<T: Into<String>>(dir: T) -> &'static RdbPool {
-        use command_utils::util::result::TapErr;
-
         SQLITE_INIT
             .get_or_init(|| async {
                 _setup_sqlite_internal(dir)
                     .await
-                    .tap_err(|e| tracing::error!("error: {:?}", e))
+                    .inspect_err(|e| tracing::error!("error: {:?}", e))
                     .unwrap()
             })
             .await

@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use command_utils::util::result::ToOption;
 use debug_stub_derive::DebugStub;
 use log::LevelFilter;
 use serde::Deserialize;
@@ -244,8 +243,8 @@ impl RdbConfig {
             .or_else(|_| {
                 envy::prefixed(format!("{}{}", &prefix, "MYSQL_")).from_env::<RdbConfigImpl>()
             })
-            .to_option()
             .map(RdbConfig::Separate)
+            .ok()
     }
     fn load_db_url_config_from_env(prefix: String) -> Option<RdbConfig> {
         envy::prefixed(format!("{}{}", &prefix, "SQLITE_"))
@@ -253,8 +252,8 @@ impl RdbConfig {
             .or_else(|_| {
                 envy::prefixed(format!("{}{}", &prefix, "MYSQL_")).from_env::<RdbUrlConfigImpl>()
             })
-            .to_option()
             .map(RdbConfig::Url)
+            .ok()
     }
 }
 

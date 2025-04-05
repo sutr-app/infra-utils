@@ -2,7 +2,6 @@ use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use chrono::{DateTime, Datelike, FixedOffset};
 use command_utils::util::datetime;
-use command_utils::util::option::FlatMap;
 use command_utils::util::result::Flatten;
 use deadpool::managed::{
     Manager, Object, Pool, PoolConfig, PoolError, RecycleError, RecycleResult, Timeouts,
@@ -392,7 +391,7 @@ pub trait WebScraper: UseWebDriver + Send + Sync {
                     let now = datetime::now();
                     Regex::new(fmt.as_str())
                         .map(|dt_re| {
-                            dt_re.captures(dt_value.as_str()).flat_map(|c| {
+                            dt_re.captures(dt_value.as_str()).and_then(|c| {
                                 // XXX 年月日、時分秒の順でマッチする前提
                                 datetime::ymdhms(
                                     c.get(1).map_or(now.year(), |r| r.as_str().parse().unwrap()),
