@@ -110,7 +110,7 @@ pub async fn request_to_utf8(
             Err(anyhow!("denied by robots.txt"))?
         }
     }
-    let client = ReqwestClient::new(user_agent, Some(Duration::new(30, 0)), Some(2))?;
+    let client = ReqwestClient::new(user_agent, Some(Duration::new(30, 0)), None, Some(2))?;
     let res = client.client().get(url).send().await?;
     if res.status().is_success() {
         let url = Url::parse(url)?;

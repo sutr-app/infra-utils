@@ -13,11 +13,15 @@ use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use serde_with::DurationSeconds;
 use std::borrow::Cow;
+use std::sync::Arc;
 use std::time::Duration;
 use strum::{self, IntoEnumIterator};
 use strum_macros::{self, EnumIter};
 use thirtyfour::prelude::*;
+use thirtyfour::session::http::HttpClient;
 use thirtyfour::ChromeCapabilities;
+
+use super::reqwest::ReqwestClient;
 
 #[serde_as]
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -538,5 +542,54 @@ impl SelectorType {
             Self::ByTag => By::Tag(s),
             Self::ByLinkText => By::LinkText(s),
         }
+    }
+}
+
+use bytes::Bytes;
+use http::{Request, Response};
+use thirtyfour::session::http::Body;
+
+#[async_trait::async_trait]
+impl HttpClient for ReqwestClient {
+    async fn send(&self, request: Request<Body<'_>>) -> WebDriverResult<Response<Bytes>> {
+        let (parts, body) = request.into_parts();
+
+        let mut req = self.client().request(parts.method, parts.uri.to_string());
+        for (key, value) in parts.headers.into_iter() {
+            let key = match key {
+                Some(x) => x,
+                None => continue,
+            };
+            req = req.header(key, value);
+        }
+        match body {
+            Body::Empty => req = req.body(reqwest::Body::default()),
+            Body::Json(json) => {
+                req = req.json(json);
+            }
+        }
+
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| WebDriverError::HttpError(format!("request error: {:?}", e)))?;
+        let status = resp.status();
+        let mut builder = Response::builder();
+
+        builder = builder.status(status);
+        for (key, value) in resp.headers().iter() {
+            builder = builder.header(key.clone(), value.clone());
+        }
+
+        let body = resp.bytes().await?;
+        let body_str = String::from_utf8_lossy(&body).into_owned();
+        let resp = builder
+            .body(body)
+            .map_err(|_| WebDriverError::UnknownResponse(status.as_u16(), body_str))?;
+        Ok(resp)
+    }
+
+    async fn new(&self) -> Arc<dyn HttpClient> {
+        Arc::new(self.clone()) // as Arc<dyn HttpClient>
     }
 }
