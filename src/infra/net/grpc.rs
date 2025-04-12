@@ -117,7 +117,7 @@ where
     S::Future: Send + 'static,
 {
     tower::ServiceBuilder::new()
-        .layer(CorsLayer::new())
+        .layer(CorsLayer::permissive())
         .layer(tonic_web::GrpcWebLayer::new())
         .into_inner()
         .named_layer(service)
