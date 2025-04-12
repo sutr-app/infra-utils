@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use serde_with::DurationSeconds;
 use std::borrow::Cow;
+use std::sync::Arc;
 use std::time::Duration;
 use strum::{self, IntoEnumIterator};
 use strum_macros::{self, EnumIter};
@@ -586,5 +587,8 @@ impl HttpClient for ReqwestClient {
             .body(body)
             .map_err(|_| WebDriverError::UnknownResponse(status.as_u16(), body_str))?;
         Ok(resp)
+    }
+    async fn new(&self) -> Arc<dyn HttpClient> {
+        Arc::new(self.clone())
     }
 }
