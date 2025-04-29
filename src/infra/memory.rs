@@ -22,7 +22,7 @@ impl Default for MemoryCacheConfig {
         // TODO consider of machine memory size?
         Self {
             num_counters: 12960,
-            max_cost: 1296,
+            max_cost: 12960,
             use_metrics: true,
         }
     }
