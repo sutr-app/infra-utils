@@ -188,6 +188,7 @@ impl Manager for WebDriverManagerImpl {
         //https://stackoverflow.com/a/46532764
         match wrap.driver.title().await {
             Ok(_title) => {
+                tracing::debug!("webdriver recycle (reuse): {:?}", _title);
                 // if session.is_empty() {
                 //     //セッションがない(detachがasyncじゃないのでここで念のためquit()しておく)
                 //     let quit = wrap.quit().await;
@@ -201,6 +202,7 @@ impl Manager for WebDriverManagerImpl {
             }
             Err(e) => {
                 // detachがasyncじゃないのでここで念のためquit()しておく
+                tracing::info!("webdriver recycle error (quit instance): {:?}", e);
                 let quit = wrap.quit().await;
                 Err(RecycleError::Message(Cow::Owned(format!(
                     "error in getting session: {:?}, quit: {:?}",
@@ -222,8 +224,9 @@ pub trait UseWebDriverPool {
     fn web_driver_pool(&self) -> &WebDriverPool;
 }
 
+pub type WebDriverWrapperError = WebDriverError;
 // pub type WebDriverPool = Pool<WebDriverManagerImpl, Object<WebDriverManagerImpl>>;
-pub type WebDriverPoolError = PoolError<WebDriverError>;
+pub type WebDriverPoolError = PoolError<WebDriverWrapperError>;
 
 pub struct WebDriverPool {
     pub pool: Pool<WebDriverManagerImpl, Object<WebDriverManagerImpl>>,
@@ -428,6 +431,13 @@ pub trait WebScraper: UseWebDriver + Send + Sync {
 
     async fn quit(&self) -> Result<(), WebDriverError> {
         self.driver().clone().quit().await
+    }
+
+    async fn leak(&self) -> Result<(), anyhow::Error> {
+        self.driver().clone().leak().map_err(|e| {
+            tracing::error!("webdriver leak error: {:?}", e);
+            anyhow!("webdriver leak error: {:?}", e)
+        })
     }
 
     async fn scrape_content(
