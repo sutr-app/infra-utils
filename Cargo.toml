@@ -60,6 +60,7 @@ stretto = { version = "0.8", features = ["async"] }
 strum = "0.27"
 strum_macros = "0.27"
 thirtyfour = { git = "https://github.com/sutr-app/thirtyfour.git", branch = "main" }
+#thirtyfour = { version = "0.34" }
 tonic = { version = "0.13", features = ["tls-ring", "tls-webpki-roots"] }
 tonic-web = { version = "0.13" }
 tokio = { version = "1", features = ["full"] }
