@@ -90,9 +90,12 @@ impl ChromeDriverFactory {
         let mut caps = DesiredCapabilities::chrome();
         // https://stackoverflow.com/a/52340526
         // caps.add_extension(Path::new("./adblock.crx"))?;
+        // caps.add_arg("--window-size=1920,1080")?;
         caps.add_arg("start-maximized")?; // open Browser in maximized mode
-        caps.add_arg("enable-automation")?; // https://stackoverflow.com/a/43840128/1689770
+        // caps.add_arg("enable-automation")?; // https://stackoverflow.com/a/43840128/1689770
         caps.set_headless()?;
+        // caps.add_arg("--headless=new")?;
+
         caps.add_arg("--no-sandbox")?; // Bypass OS security model // necessary in docker env
         caps.add_arg("--disable-dev-shm-usage")?; // if tab crash error occurred (add shm mem to container or this option turned on)
         caps.add_arg("--disable-browser-side-navigation")?; //https://stackoverflow.com/a/49123152/1689770"
@@ -105,6 +108,19 @@ impl ChromeDriverFactory {
                                              //        caps.add_arg("--disk-cache=false")?;
                                              //        caps.add_arg("--load-images=false")?;
                                              //        caps.add_arg("--dns-prefetch-disable")?;
+                                             // stelth mode
+                                             // navigator.webdriver=false
+
+        // caps.add_arg("--dns-prefetch-disable")?;
+
+        // https://stackoverflow.com/questions/53039551/selenium-webdriver-modifying-navigator-webdriver-flag-to-prevent-selenium-detec
+        caps.add_arg("--disable-blink-features=AutomationControlled")?;
+        caps.add_arg("--disable-browser-side-navigation")?;
+        // caps.add_arg("--incognito")?;
+
+        // caps.add_experimental_option("excludeSwitches", ["enable-automation"])?;
+        caps.add_exclude_switch("enable-automation")?;
+        caps.add_experimental_option("useAutomationExtension", false)?;
 
         caps.add_arg(
             format!(
