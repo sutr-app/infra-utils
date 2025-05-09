@@ -92,7 +92,6 @@ impl ChromeDriverFactory {
         // caps.add_extension(Path::new("./adblock.crx"))?;
         // caps.add_arg("--window-size=1920,1080")?;
         caps.add_arg("start-maximized")?; // open Browser in maximized mode
-        // caps.add_arg("enable-automation")?; // https://stackoverflow.com/a/43840128/1689770
         caps.set_headless()?;
         // caps.add_arg("--headless=new")?;
 
@@ -119,6 +118,7 @@ impl ChromeDriverFactory {
         // caps.add_arg("--incognito")?;
 
         // caps.add_experimental_option("excludeSwitches", ["enable-automation"])?;
+        // caps.add_arg("enable-automation")?; // https://stackoverflow.com/a/43840128/1689770
         caps.add_exclude_switch("enable-automation")?;
         caps.add_experimental_option("useAutomationExtension", false)?;
 
