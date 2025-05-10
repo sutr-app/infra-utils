@@ -89,9 +89,11 @@ impl ChromeDriverFactory {
     ) -> Result<ChromeCapabilities, Box<WebDriverError>> {
         let mut caps = DesiredCapabilities::chrome();
         // https://stackoverflow.com/a/52340526
+        // https://stackoverflow.com/questions/48450594/selenium-timed-out-receiving-message-from-renderer
         // caps.add_extension(Path::new("./adblock.crx"))?;
         // caps.add_arg("--window-size=1920,1080")?;
         caps.add_arg("start-maximized")?; // open Browser in maximized mode
+        caps.add_arg("enable-automation")?; // https://stackoverflow.com/a/43840128/1689770
         caps.set_headless()?;
         // caps.add_arg("--headless=new")?;
 
@@ -110,7 +112,8 @@ impl ChromeDriverFactory {
                                              // stelth mode
                                              // navigator.webdriver=false
 
-        // caps.add_arg("--dns-prefetch-disable")?;
+        caps.add_arg("--disable-extensions")?;
+        caps.add_arg("--dns-prefetch-disable")?;
 
         // https://stackoverflow.com/questions/53039551/selenium-webdriver-modifying-navigator-webdriver-flag-to-prevent-selenium-detec
         caps.add_arg("--disable-blink-features=AutomationControlled")?;
@@ -118,7 +121,6 @@ impl ChromeDriverFactory {
         // caps.add_arg("--incognito")?;
 
         // caps.add_experimental_option("excludeSwitches", ["enable-automation"])?;
-        // caps.add_arg("enable-automation")?; // https://stackoverflow.com/a/43840128/1689770
         caps.add_exclude_switch("enable-automation")?;
         caps.add_experimental_option("useAutomationExtension", false)?;
 
