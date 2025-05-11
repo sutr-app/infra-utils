@@ -93,7 +93,8 @@ pub async fn readable_by_robots_txt(
     user_agent: Option<&str>,
 ) -> Result<Option<bool>> {
     let url = Url::parse(url_str)?;
-    let robots_txt = get_robots_txt(url_str, user_agent, None).await?;
+    let bot_ua = "curl/8.7.1"; // for fetching robots.txt only
+    let robots_txt = get_robots_txt(url_str, Some(bot_ua), None).await?;
     Ok(robots_txt.map(|t| {
         available_url_by_robots_txt(t.as_str(), url.as_str(), user_agent.unwrap_or("robotstxt"))
     }))
