@@ -37,7 +37,18 @@ pub trait Tracing {
         let parent_cx =
             global::get_text_map_propagator(|prop| prop.extract(&MetadataMap(request.metadata())));
         let mut span = global::tracer(name).start_with_context(span_name, &parent_cx);
+
+        span.set_attribute(KeyValue::new("service.name", name));
+        span.set_attribute(KeyValue::new("service.method", span_name));
         span.set_attribute(KeyValue::new("request", format!("{:?}", request)));
+
+        if let Some(req_path) = request.metadata().get("path") {
+            if let Ok(path_str) = req_path.to_str() {
+                // Clone the string to own it, avoiding reference lifetime issues
+                span.set_attribute(KeyValue::new("request.path", path_str.to_string()));
+            }
+        }
+
         span
     }
 }
