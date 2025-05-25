@@ -1,9 +1,33 @@
 use opentelemetry::{
-    global::{self, BoxedTracer}, trace::{SpanBuilder, SpanKind, Tracer}, KeyValue
+    global::{self, BoxedTracer},
+    trace::{self, SpanBuilder, SpanKind, Tracer},
+    Context, KeyValue,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::time::Duration;
+use std::{collections::HashMap, sync::Arc};
+
+/// Carrier extractor for extracting context from HTTP headers or similar key-value maps
+struct CarrierExtractor<'a>(&'a HashMap<String, String>);
+
+impl<'a> opentelemetry::propagation::Extractor for CarrierExtractor<'a> {
+    fn get(&self, key: &str) -> Option<&str> {
+        self.0.get(key).map(|s| s.as_str())
+    }
+
+    fn keys(&self) -> Vec<&str> {
+        self.0.keys().map(|s| s.as_str()).collect()
+    }
+}
+
+/// Carrier injector for injecting context into HTTP headers or similar key-value maps
+struct CarrierInjector<'a>(&'a mut HashMap<String, String>);
+
+impl<'a> opentelemetry::propagation::Injector for CarrierInjector<'a> {
+    fn set(&mut self, key: &str, value: String) {
+        self.0.insert(key.to_string(), value);
+    }
+}
 
 /// Configuration for Langfuse specific client  
 #[derive(Debug, Clone)]
@@ -34,6 +58,7 @@ pub struct OtelSpanData {
 pub struct OtelSpanAttributes {
     pub span_type: OtelSpanType,
     pub name: String,
+    pub span_id: Option<String>, // Span ID for referencing in parent/child relationships
     pub user_id: Option<String>,
     pub session_id: Option<String>,
     pub version: Option<String>,
@@ -71,6 +96,7 @@ impl Default for OtelSpanAttributes {
         Self {
             span_type: OtelSpanType::Span,
             name: String::new(),
+            span_id: None,
             user_id: None,
             session_id: None,
             version: None,
@@ -154,21 +180,300 @@ pub trait GenAIOtelClient: Send + Sync {
 
     /// Start and automatically finish a span with a closure
     // #[allow(async_fn_in_trait)]
-    fn with_span<F, T>(&self, attributes: OtelSpanAttributes, f: F) -> impl std::future::Future<Output = T> + Send + '_
+    fn with_span<F, T>(
+        &self,
+        attributes: OtelSpanAttributes,
+        f: F,
+    ) -> impl std::future::Future<Output = T> + Send + '_
     where
         F: std::future::Future<Output = T> + Send + 'static,
-    {async move {
-        use opentelemetry::trace::Span;
-        
-        let mut span = self.start_span(attributes);
-        
-        // Execute the future
-        let result = f.await;
-        
-        // End the span manually
-        span.end();
-        result
-    } }
+    {
+        async move {
+            use opentelemetry::trace::Span;
+
+            let mut span = self.start_span(attributes);
+
+            // Execute the future
+            let result = f.await;
+
+            // End the span manually
+            span.end();
+            result
+        }
+    }
+
+    /// Start and automatically finish a span with error handling
+    fn with_span_result<F, T, E>(
+        &self,
+        attributes: OtelSpanAttributes,
+        f: F,
+    ) -> impl std::future::Future<Output = Result<T, E>> + Send + '_
+    where
+        F: std::future::Future<Output = Result<T, E>> + Send + 'static,
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        async move {
+            use opentelemetry::trace::{Span, Status};
+
+            let mut span = self.start_span(attributes);
+
+            // Execute the future and handle errors
+            let result = f.await;
+
+            match &result {
+                Ok(_) => {
+                    // Set success status
+                    span.set_status(Status::Ok);
+                }
+                Err(error) => {
+                    // Use the record_error method for consistent error handling
+                    self.record_error(&mut span, &error);
+                    
+                    // Log the error for additional visibility
+                    tracing::error!(
+                        error = %error,
+                        span_name = span.span_context().span_id().to_string(),
+                        "Error occurred in traced span"
+                    );
+                }
+            }
+
+            // End the span manually
+            span.end();
+            result
+        }
+    }
+
+    /// Record an error on an existing span without ending it
+    fn record_error(
+        &self,
+        span: &mut opentelemetry::global::BoxedSpan,
+        error: &(dyn std::error::Error + Send + Sync),
+    ) {
+        use opentelemetry::trace::{Span, Status};
+
+        // Set error status
+        span.set_status(Status::error(error.to_string()));
+
+        // Record error information as span attributes
+        span.set_attribute(opentelemetry::KeyValue::new(
+            "error.type",
+            error
+                .source()
+                .map_or_else(|| "unknown".to_string(), |e| format!("{:?}", e)),
+        ));
+        span.set_attribute(opentelemetry::KeyValue::new(
+            "error.message",
+            error.to_string(),
+        ));
+        span.set_attribute(opentelemetry::KeyValue::new("error.occurred", true));
+
+        // Add error chain if available
+        let mut error_chain = Vec::new();
+        let mut current_error: &dyn std::error::Error = error;
+        while let Some(source) = current_error.source() {
+            error_chain.push(source.to_string());
+            current_error = source;
+        }
+
+        if !error_chain.is_empty() {
+            span.set_attribute(opentelemetry::KeyValue::new(
+                "error.chain",
+                error_chain.join(" -> "),
+            ));
+        }
+
+        // Record error as an event with stack trace if available
+        let mut event_attributes = vec![
+            opentelemetry::KeyValue::new("error.occurred", true),
+            opentelemetry::KeyValue::new("error.message", error.to_string()),
+            opentelemetry::KeyValue::new("error.timestamp", chrono::Utc::now().to_rfc3339()),
+        ];
+
+        // Add stack trace if available (simplified for this example)
+        if let Some(backtrace) = std::backtrace::Backtrace::capture()
+            .to_string()
+            .lines()
+            .take(10)
+            .collect::<Vec<_>>()
+            .get(0)
+        {
+            event_attributes.push(opentelemetry::KeyValue::new(
+                "error.stack_trace",
+                backtrace.to_string(),
+            ));
+        }
+
+        span.add_event("error".to_string(), event_attributes);
+
+        // Log the error for additional visibility
+        tracing::error!(
+            error = %error,
+            error_chain = ?error_chain,
+            span_id = span.span_context().span_id().to_string(),
+            "Error recorded in span"
+        );
+    }
+
+    /// Create an error span for standalone error logging
+    fn create_error_span(
+        &self,
+        error: &(dyn std::error::Error + Send + Sync),
+        context: Option<&str>,
+    ) -> OtelSpanAttributes {
+        let span_name = context.map_or_else(
+            || format!("error: {}", error),
+            |ctx| format!("error in {}: {}", ctx, error),
+        );
+
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "error_type".to_string(),
+            serde_json::json!(format!("{:?}", error)),
+        );
+        metadata.insert(
+            "error_message".to_string(),
+            serde_json::json!(error.to_string()),
+        );
+        metadata.insert(
+            "error_timestamp".to_string(),
+            serde_json::json!(chrono::Utc::now().to_rfc3339()),
+        );
+
+        // Add error chain
+        let mut error_chain = Vec::new();
+        let mut current_error: &dyn std::error::Error = error;
+        while let Some(source) = current_error.source() {
+            error_chain.push(source.to_string());
+            current_error = source;
+        }
+        if !error_chain.is_empty() {
+            metadata.insert("error_chain".to_string(), serde_json::json!(error_chain));
+        }
+
+        OtelSpanBuilder::new(span_name)
+            .span_type(OtelSpanType::Event)
+            .level("ERROR")
+            .status_message(error.to_string())
+            .metadata(metadata)
+            .tags(vec!["error".to_string(), "exception".to_string()])
+            .build()
+    }
+
+    /// Log an error with automatic span creation
+    fn log_error(
+        &self,
+        error: &(dyn std::error::Error + Send + Sync),
+        context: Option<&str>,
+    ) -> impl std::future::Future<Output = ()> + Send + '_ {
+        let error_string = error.to_string();
+        let context_string = context.map(|s| s.to_string());
+        let error_attributes = self.create_error_span(error, context);
+
+        async move {
+            self.with_span(error_attributes, async move {
+                tracing::error!(
+                    error = %error_string,
+                    context = ?context_string,
+                    "Error logged with automatic span creation"
+                );
+            })
+            .await;
+        }
+    }
+
+    /// Enhanced span with comprehensive error handling and timeout
+    fn with_span_timeout<F, T, E>(
+        &self,
+        attributes: OtelSpanAttributes,
+        timeout: std::time::Duration,
+        f: F,
+    ) -> impl std::future::Future<Output = Result<T, Box<dyn std::error::Error + Send + Sync>>> + Send + '_
+    where
+        F: std::future::Future<Output = Result<T, E>> + Send + 'static,
+        E: std::error::Error + Send + Sync + 'static,
+        T: Send + 'static,
+    {
+        async move {
+            use opentelemetry::trace::{Span, Status};
+            use tokio::time::timeout as tokio_timeout;
+
+            let mut span = self.start_span(attributes);
+
+            // Add timeout information to span
+            span.set_attribute(opentelemetry::KeyValue::new(
+                "timeout.duration_ms",
+                timeout.as_millis() as i64,
+            ));
+            span.set_attribute(opentelemetry::KeyValue::new("timeout.enabled", true));
+
+            let start_time = std::time::Instant::now();
+
+            // Execute with timeout
+            let result = tokio_timeout(timeout, f).await;
+
+            let execution_time = start_time.elapsed();
+            span.set_attribute(opentelemetry::KeyValue::new(
+                "execution.duration_ms",
+                execution_time.as_millis() as i64,
+            ));
+
+            match result {
+                Ok(Ok(value)) => {
+                    span.set_status(Status::Ok);
+                    span.set_attribute(opentelemetry::KeyValue::new("execution.status", "success"));
+                    span.end();
+                    Ok(value)
+                }
+                Ok(Err(error)) => {
+                    // Handle the actual error
+                    span.set_status(Status::error(error.to_string()));
+                    span.set_attribute(opentelemetry::KeyValue::new("execution.status", "error"));
+
+                    self.record_error(&mut span, &error);
+                    span.end();
+
+                    Err(Box::new(error) as Box<dyn std::error::Error + Send + Sync>)
+                }
+                Err(_timeout_error) => {
+                    // Handle timeout
+                    let timeout_msg = format!("Operation timed out after {:?}", timeout);
+                    span.set_status(Status::error(timeout_msg.clone()));
+                    span.set_attribute(opentelemetry::KeyValue::new("execution.status", "timeout"));
+                    span.set_attribute(opentelemetry::KeyValue::new("error.type", "timeout"));
+                    span.set_attribute(opentelemetry::KeyValue::new(
+                        "error.message",
+                        timeout_msg.clone(),
+                    ));
+
+                    span.add_event(
+                        "timeout".to_string(),
+                        vec![
+                            opentelemetry::KeyValue::new("timeout.occurred", true),
+                            opentelemetry::KeyValue::new(
+                                "timeout.duration_ms",
+                                timeout.as_millis() as i64,
+                            ),
+                            opentelemetry::KeyValue::new(
+                                "timeout.timestamp",
+                                chrono::Utc::now().to_rfc3339(),
+                            ),
+                        ],
+                    );
+
+                    tracing::error!(
+                        timeout_duration = ?timeout,
+                        execution_time = ?execution_time,
+                        span_id = span.span_context().span_id().to_string(),
+                        "Operation timed out in traced span"
+                    );
+
+                    span.end();
+                    Err(timeout_msg.into())
+                }
+            }
+        }
+    }
 }
 
 /// Generic OpenTelemetry client implementation
@@ -189,6 +494,11 @@ impl GenericOtelClient {
     /// Get the global tracer for this client
     fn get_tracer(&self) -> BoxedTracer {
         global::tracer(self.tracer_name.clone())
+    }
+
+    /// Get the tracer name - exposed for compatibility with context-aware client
+    pub fn get_tracer_name(&self) -> String {
+        self.tracer_name.clone()
     }
 }
 
@@ -307,6 +617,9 @@ impl GenAIOtelClient for GenericOtelClient {
         }
 
         if let Some(parent_observation_id) = attributes.parent_observation_id {
+            key_values.push(KeyValue::new("parent_id", parent_observation_id.clone()));
+            key_values.push(KeyValue::new("parentId", parent_observation_id.clone()));
+            key_values.push(KeyValue::new("parent.id", parent_observation_id.clone()));
             key_values.push(KeyValue::new(
                 "langfuse.observation.parent_observation_id",
                 parent_observation_id,
@@ -404,15 +717,12 @@ impl GenAIOtelClient for GenericOtelClient {
 
         // Prompt information
         if let Some(prompt_name) = attributes.prompt_name {
-            key_values.push(KeyValue::new(
-                "langfuse.observation.prompt.name",
-                prompt_name,
-            ));
+            key_values.push(KeyValue::new("langfuse.prompt.name", prompt_name));
         }
 
         if let Some(prompt_version) = attributes.prompt_version {
             key_values.push(KeyValue::new(
-                "langfuse.observation.prompt.version",
+                "langfuse.prompt.version",
                 prompt_version.to_string(),
             ));
         }
@@ -426,6 +736,21 @@ impl GenAIOtelClient for GenericOtelClient {
         }
 
         // Trace-level attributes
+        if let Some(trace_id) = &attributes.trace_id {
+            key_values.push(KeyValue::new("trace.id", trace_id.clone()));
+            // For compatibility with OpenTelemetry standard
+            key_values.push(KeyValue::new("trace_id", trace_id.clone()));
+        }
+
+        // Add explicit span_id if provided - important for hierarchical spans
+        if let Some(span_id) = &attributes.span_id {
+            key_values.push(KeyValue::new("span.id", span_id.clone()));
+            // Also add for other systems' compatibility
+            key_values.push(KeyValue::new("span_id", span_id.clone()));
+            key_values.push(KeyValue::new("spanId", span_id.clone()));
+            key_values.push(KeyValue::new("langfuse.observation.id", span_id.clone()));
+        }
+
         if let Some(trace_name) = attributes.trace_name {
             key_values.push(KeyValue::new("langfuse.trace.name", trace_name));
         }
@@ -448,10 +773,7 @@ impl GenAIOtelClient for GenericOtelClient {
         }
 
         if let Some(trace_public) = attributes.trace_public {
-            key_values.push(KeyValue::new(
-                "langfuse.trace.public",
-                trace_public.to_string(),
-            ));
+            key_values.push(KeyValue::new("langfuse.trace.public", trace_public));
         }
 
         if let Some(trace_metadata) = attributes.trace_metadata {
@@ -775,6 +1097,11 @@ impl OtelSpanBuilder {
         self
     }
 
+    pub fn span_id(mut self, span_id: impl Into<String>) -> Self {
+        self.attributes.span_id = Some(span_id.into());
+        self
+    }
+
     pub fn build(self) -> OtelSpanAttributes {
         self.attributes
     }
@@ -789,47 +1116,133 @@ impl OtelSpanBuilder {
 pub trait HierarchicalSpanClient: GenAIOtelClient {
     /// Create a parent span and execute a function that may create child spans
     #[allow(async_fn_in_trait)]
-    async fn with_parent_span<F, T>(&self, attributes: OtelSpanAttributes, f: F) -> T 
+    async fn with_parent_span<F, T>(&self, attributes: OtelSpanAttributes, f: F) -> T
     where
         F: std::future::Future<Output = T> + Send,
     {
-        use opentelemetry::trace::Span;
-        
-        // Start parent span
-        let mut parent_span = self.start_span(attributes);
-        
-        // Execute the function
-        let result = f.await;
+        use opentelemetry::trace::{TraceContextExt, Tracer};
 
-        // End parent span
-        parent_span.end();
+        let tracer = self.get_tracer();
+        let builder = self.create_span_builder(attributes);
+        let span = tracer.build(builder);
+
+        // Create context with this span as the current span
+        let context = Context::current().with_span(span);
+
+        // Execute the function within the span context
+        let result = {
+            let _guard = context.attach();
+            f.await
+        };
 
         result
     }
 
-    /// Create a child span that explicitly references a parent span
-    #[allow(async_fn_in_trait)]
-    async fn with_child_span<F, T>(
+    /// Create a child span that automatically inherits from the current context
+    fn with_child_span<F, T>(
         &self,
         attributes: OtelSpanAttributes,
-        parent_span_id: Option<String>,
+        f: F,
+    ) -> impl std::future::Future<Output = T> + Send + '_
+    where
+        F: std::future::Future<Output = T> + Send + 'static,
+    {
+        async move {
+            use opentelemetry::trace::Tracer;
+
+            let tracer = self.get_tracer();
+            let builder = self.create_span_builder(attributes);
+
+            // Build span with current context as parent (automatic parent-child relationship)
+            let span = tracer.build(builder);
+            let result = {
+                let _ = Arc::new(trace::mark_span_as_active(span));
+                f.await
+            };
+            // drop(_guard);
+
+            result
+        }
+    }
+
+    /// Create a child span from a specific parent context
+    #[allow(async_fn_in_trait)]
+    async fn with_child_span_from_context<F, T>(
+        &self,
+        attributes: OtelSpanAttributes,
+        parent_context: &Context,
         f: F,
     ) -> T
     where
         F: std::future::Future<Output = T> + Send + 'static,
     {
-        // If parent ID is provided, add it to the attributes
-        let attributes = if let Some(parent_id) = parent_span_id {
-            OtelSpanBuilder::from_attributes(attributes)
-                .parent_observation_id(parent_id)
-                .build()
-        } else {
-            attributes
+        use opentelemetry::trace::{TraceContextExt, Tracer};
+
+        let tracer = self.get_tracer();
+        let builder = self.create_span_builder(attributes);
+
+        // Build span with specified parent context
+        let span = tracer.build_with_context(builder, parent_context);
+
+        // Create new context with this child span
+        let new_context = parent_context.with_span(span);
+
+        // Execute the function with the child span context
+        let result = {
+            let _guard = new_context.attach();
+            f.await
         };
 
-        // Create and use the span
-        self.with_span(attributes, f).await
+        result
     }
+
+    /// Create a remote child span from propagated trace context (for distributed tracing)
+    #[allow(async_fn_in_trait)]
+    async fn with_remote_child_span<F, T>(
+        &self,
+        attributes: OtelSpanAttributes,
+        carrier: &HashMap<String, String>,
+        f: F,
+    ) -> T
+    where
+        F: std::future::Future<Output = T> + Send + 'static,
+    {
+        use opentelemetry::{
+            global,
+            trace::{TraceContextExt, Tracer},
+        };
+
+        // Extract context from carrier using the global propagator
+        let parent_context = global::get_text_map_propagator(|propagator| {
+            propagator.extract(&CarrierExtractor(carrier))
+        });
+
+        let tracer = self.get_tracer();
+        let builder = self.create_span_builder(attributes);
+
+        // Build span with extracted parent context
+        let span = tracer.build_with_context(builder, &parent_context);
+
+        // Create new context with this child span
+        let new_context = parent_context.with_span(span);
+
+        // Execute the function with the child span context
+        let _guard = new_context.attach();
+        f.await
+    }
+
+    /// Inject current span context into a carrier for distributed tracing
+    fn inject_span_context(&self, carrier: &mut HashMap<String, String>) {
+        use opentelemetry::global;
+
+        global::get_text_map_propagator(|propagator| {
+            let context = Context::current();
+            propagator.inject_context(&context, &mut CarrierInjector(carrier));
+        });
+    }
+
+    /// Get the tracer for span operations - should be implemented by the concrete client
+    fn get_tracer(&self) -> BoxedTracer;
 
     /// Create a trace containing multiple related spans
     #[allow(async_fn_in_trait)]
@@ -843,1291 +1256,30 @@ pub trait HierarchicalSpanClient: GenAIOtelClient {
     where
         F: std::future::Future<Output = T> + Send,
     {
-        use rand::Rng;
-
-        // Generate trace ID if not provided
-        let trace_id = trace_id.unwrap_or_else(|| {
-            let mut rng = rand::rng();
-            format!("trace-{:x}", rng.random::<u128>())
-        });
-
         // Create trace span attributes
-        let trace_attributes = OtelSpanBuilder::new(trace_name)
+        let mut trace_attributes = OtelSpanBuilder::new(trace_name)
             .span_type(OtelSpanType::Span)
-            .trace_id(trace_id.clone())
             .trace_tags(tags)
             .build();
+
+        // Set trace_id if provided
+        if let Some(id) = trace_id {
+            trace_attributes.trace_id = Some(id);
+        }
 
         // Execute with trace context
         self.with_parent_span(trace_attributes, f).await
     }
 }
-
 // Implement the trait for both client types
-impl HierarchicalSpanClient for GenericOtelClient {}
-impl HierarchicalSpanClient for LangfuseOtelClient {}
-
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use super::*;
-    use rand::rand_core::le;
-    use serde_json::json;
-
-    /// Common setup for integration tests that require OTLP endpoints
-    async fn setup_integration_test() -> Result<GenericOtelClient, Box<dyn std::error::Error>> {
-        // Set up environment variables for testing
-        // We're explicitly setting the OTLP endpoint for the test
-        let otlp_addr = "http://otel-collector.default.svc.cluster.local:4317".to_string();
-        // let otlp_http_addr = "http://otel-collector.default.svc.cluster.local:4318".to_string();
-
-        // Force override any existing configuration
-        std::env::set_var("OTLP_ADDR", &otlp_addr);
-        // std::env::set_var("OTLP_HTTP_ADDR", &otlp_http_addr);
-        // Ensure OTLP export is enabled
-        // std::env::set_var("ENABLE_OTLP_EXPORT", "true");
-        // // Set a shorter OTLP timeout for testing
-        // std::env::set_var("OTLP_TIMEOUT_MS", "500");
-        // // Set batch settings to force more frequent exports
-        // std::env::set_var("OTLP_BATCH_MAX_SIZE", "10");
-        // std::env::set_var("OTLP_BATCH_TIMEOUT_MS", "500");
-
-        println!("Running integration test with OTLP endpoint: {}", otlp_addr);
-
-        // Initialize tracing with OTLP exporter using command_utils
-        let logging_config = command_utils::util::tracing::LoggingConfig {
-            app_name: Some("otel-span-integration-test".to_string()),
-            level: Some("DEBUG".to_string()), // Use DEBUG to see more OTEL logs
-            file_name: None,
-            file_dir: None,
-            use_json: false,
-            use_stdout: true,
-        };
-
-        // Force cleanup of any previous tracer provider
-        command_utils::util::tracing::shutdown_tracer_provider();
-
-        // Initialize tracer with our settings
-        command_utils::util::tracing::tracing_init(logging_config).await.unwrap();
-
-        println!(
-            "OpenTelemetry tracer initialized for OTLP endpoint: {}",
-            otlp_addr
-        );
-
-        // Create and return client
-        // Ok(LangfuseOtelClient::new("otel-span-integration-test"))
-        Ok(GenericOtelClient::new("otel-span-integration-test"))
+impl HierarchicalSpanClient for GenericOtelClient {
+    fn get_tracer(&self) -> BoxedTracer {
+        self.get_tracer()
     }
-
-    /// Common cleanup for integration tests
-    async fn cleanup_integration_test() {
-        println!("Waiting for spans to be exported...");
-
-        // Allow more time for OTLP export - increase the wait time
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-
-        // Shutdown tracer providers to ensure data is flushed
-        // This is critical to ensure all data is sent
-        println!("Shutting down tracer provider...");
-        command_utils::util::tracing::shutdown_tracer_provider();
-
-        // Additional wait to ensure export completes after shutdown
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
-        println!("Integration test completed successfully");
-        println!("Check your OTLP endpoint/Langfuse dashboard for the test spans");
-    }
-
-    #[test]
-    fn test_span_builder() {
-        let attributes = OtelSpanBuilder::new("test-span")
-            .span_type(OtelSpanType::Generation)
-            .user_id("user-123")
-            .session_id("session-456")
-            .model("gpt-4")
-            .input(json!({"prompt": "Hello world"}))
-            .output(json!({"response": "Hello!"}))
-            .tags(vec!["test".to_string(), "example".to_string()])
-            .build();
-
-        assert_eq!(attributes.name, "test-span");
-        assert!(matches!(attributes.span_type, OtelSpanType::Generation));
-        assert_eq!(attributes.user_id, Some("user-123".to_string()));
-        assert_eq!(attributes.session_id, Some("session-456".to_string()));
-        assert_eq!(attributes.model, Some("gpt-4".to_string()));
-        assert_eq!(attributes.tags, vec!["test", "example"]);
-    }
-
-    #[test]
-    fn test_langfuse_server_compatibility() {
-        // Create a span that matches the Langfuse server test case structure
-        let attributes = OtelSpanBuilder::new("my-generation")
-            .span_type(OtelSpanType::Generation)
-            .user_id("my-user")
-            .session_id("my-session")
-            .version("trace-0.0.1")
-            .model("gpt-4o")
-            .level("WARNING")
-            .status_message("nothing to report")
-            .input(json!([{"role": "user", "content": "hello"}]))
-            .output(json!({"role": "assistant", "content": "what's up?"}))
-            .prompt_name("my-prompt")
-            .prompt_version(1)
-            .usage({
-                let mut usage = HashMap::new();
-                usage.insert("input_tokens".to_string(), 123);
-                usage.insert("output_tokens".to_string(), 456);
-                usage
-            })
-            .cost_details({
-                let mut cost = HashMap::new();
-                cost.insert("input_tokens".to_string(), 0.0001);
-                cost.insert("output_tokens".to_string(), 0.002);
-                cost
-            })
-            .metadata({
-                let mut metadata = HashMap::new();
-                metadata.insert("key1".to_string(), json!("value1"));
-                metadata.insert("key2".to_string(), json!("value2"));
-                metadata
-            })
-            .trace_name("test-trace")
-            .trace_input(json!([{"role": "user", "content": "hello"}]))
-            .trace_output(json!({"role": "assistant", "content": "what's up?"}))
-            .trace_tags(vec!["tag2".to_string()])
-            .trace_public(true)
-            .trace_metadata({
-                let mut trace_metadata = HashMap::new();
-                trace_metadata.insert("trace-key1".to_string(), json!("value1"));
-                trace_metadata.insert("trace-key2".to_string(), json!("value2"));
-                trace_metadata
-            })
-            .completion_start_time("2025-04-30T15:28:50.686390Z".to_string())
-            .build();
-
-        // Verify core attributes
-        assert_eq!(attributes.name, "my-generation");
-        assert!(matches!(attributes.span_type, OtelSpanType::Generation));
-        assert_eq!(attributes.user_id, Some("my-user".to_string()));
-        assert_eq!(attributes.session_id, Some("my-session".to_string()));
-        assert_eq!(attributes.version, Some("trace-0.0.1".to_string()));
-        assert_eq!(attributes.model, Some("gpt-4o".to_string()));
-        assert_eq!(attributes.level, Some("WARNING".to_string()));
-        assert_eq!(
-            attributes.status_message,
-            Some("nothing to report".to_string())
-        );
-
-        // Verify prompt attributes
-        assert_eq!(attributes.prompt_name, Some("my-prompt".to_string()));
-        assert_eq!(attributes.prompt_version, Some(1));
-
-        // Verify usage and cost details
-        assert!(attributes.usage.is_some());
-        assert!(attributes.cost_details.is_some());
-
-        // Verify trace-level attributes
-        assert_eq!(attributes.trace_name, Some("test-trace".to_string()));
-        assert_eq!(attributes.trace_public, Some(true));
-        assert_eq!(attributes.trace_tags, vec!["tag2"]);
-        assert!(attributes.trace_input.is_some());
-        assert!(attributes.trace_output.is_some());
-        assert!(attributes.trace_metadata.is_some());
-
-        // Verify completion start time
-        assert_eq!(
-            attributes.completion_start_time,
-            Some("2025-04-30T15:28:50.686390Z".to_string())
-        );
-    }
-
-    #[test]
-    fn test_genai_standard_attributes_mapping() {
-        // Test that gen_ai.* attributes are properly mapped following server expectation
-        let mut usage = HashMap::new();
-        usage.insert("input_tokens".to_string(), 14);
-        usage.insert("output_tokens".to_string(), 96);
-        usage.insert("total_tokens".to_string(), 110);
-
-        let mut cost_details = HashMap::new();
-        cost_details.insert("total".to_string(), 0.000151);
-
-        let attributes = OtelSpanBuilder::new("openai.chat.completions")
-            .span_type(OtelSpanType::Generation)
-            .system("openai")
-            .operation_name("chat")
-            .model("gpt-3.5-turbo")
-            .input(json!({
-                "messages": [{"role": "user", "content": "What is LLM Observability?"}]
-            }))
-            .output(json!({
-                "role": "assistant",
-                "content": "LLM Observability stands for logs, metrics, and traces observability."
-            }))
-            .usage(usage)
-            .cost_details(cost_details)
-            .response_id("chatcmpl-AugxBIoQzz2zFMWFoiyS3Vmm1OuQI")
-            .finish_reasons(vec!["stop".to_string()])
-            .is_stream(false)
-            .openinference_span_kind("LLM")
-            .build();
-
-        // Verify that the attributes would map to the correct gen_ai.* keys
-        assert_eq!(attributes.system, Some("openai".to_string()));
-        assert_eq!(attributes.operation_name, Some("chat".to_string()));
-        assert_eq!(attributes.model, Some("gpt-3.5-turbo".to_string()));
-        assert_eq!(
-            attributes.response_id,
-            Some("chatcmpl-AugxBIoQzz2zFMWFoiyS3Vmm1OuQI".to_string())
-        );
-        assert_eq!(attributes.finish_reasons, vec!["stop"]);
-        assert_eq!(attributes.is_stream, Some(false));
-        assert_eq!(attributes.openinference_span_kind, Some("LLM".to_string()));
-
-        // Verify usage mapping for gen_ai.usage.* attributes
-        let usage = attributes.usage.unwrap();
-        assert_eq!(usage.get("input_tokens"), Some(&14));
-        assert_eq!(usage.get("output_tokens"), Some(&96));
-        assert_eq!(usage.get("total_tokens"), Some(&110));
-
-        // Verify cost mapping for gen_ai.usage.cost
-        let cost = attributes.cost_details.unwrap();
-        assert_eq!(cost.get("total"), Some(&0.000151));
-    }
-
-    #[test]
-    fn test_nested_span_structure() {
-        // Create a parent span
-        let parent_attributes = OtelSpanBuilder::new("llm-conversation")
-            .span_type(OtelSpanType::Span)
-            .user_id("user_nested_test")
-            .session_id("session_nested_123")
-            .trace_id("trace_abc123")
-            .tags(vec!["conversation".to_string(), "multi-turn".to_string()])
-            .build();
-
-        // Create a child generation span
-        let mut child_usage = HashMap::new();
-        child_usage.insert("promptTokens".to_string(), 89);
-        child_usage.insert("completionTokens".to_string(), 156);
-        child_usage.insert("totalTokens".to_string(), 245);
-
-        let child_attributes = OtelSpanBuilder::new("llm-response-generation")
-            .span_type(OtelSpanType::Generation)
-            .user_id("user_nested_test")
-            .session_id("session_nested_123")
-            .trace_id("trace_abc123")
-            .parent_observation_id("parent_span_id_456")
-            .model("gpt-4-turbo")
-            .input(json!({
-                "messages": [
-                    {"role": "user", "content": "What are the benefits of renewable energy?"}
-                ]
-            }))
-            .output(json!({
-                "content": "Renewable energy offers several key benefits including environmental protection, economic advantages, and energy security improvements."
-            }))
-            .usage(child_usage)
-            .tags(vec!["generation".to_string(), "renewable-energy".to_string()])
-            .build();
-
-        // Verify parent span
-        assert_eq!(parent_attributes.name, "llm-conversation");
-        assert!(matches!(parent_attributes.span_type, OtelSpanType::Span));
-        assert_eq!(parent_attributes.trace_id, Some("trace_abc123".to_string()));
-
-        // Verify child span
-        assert_eq!(child_attributes.name, "llm-response-generation");
-        assert!(matches!(
-            child_attributes.span_type,
-            OtelSpanType::Generation
-        ));
-        assert_eq!(
-            child_attributes.parent_observation_id,
-            Some("parent_span_id_456".to_string())
-        );
-        assert_eq!(child_attributes.trace_id, Some("trace_abc123".to_string()));
-        assert!(child_attributes.usage.is_some());
-    }
-
-    #[test]
-    fn test_span_builder_attributes_serialization() {
-        // Test that complex data structures serialize correctly
-        let complex_input = json!({
-            "prompt": {
-                "text": "Generate a detailed analysis",
-                "context": {
-                    "domain": "finance",
-                    "audience": "professional",
-                    "constraints": ["accuracy", "brevity", "actionable"]
-                },
-                "examples": [
-                    {"input": "example1", "output": "result1"},
-                    {"input": "example2", "output": "result2"}
-                ]
-            },
-            "parameters": {
-                "style": "analytical",
-                "depth": "comprehensive",
-                "format": "structured"
-            }
-        });
-
-        let attributes = OtelSpanBuilder::new("complex-analysis-generation")
-            .span_type(OtelSpanType::Generation)
-            .input(complex_input)
-            .build();
-
-        assert!(attributes.data.input.is_some());
-
-        // Verify the input can be serialized back to JSON
-        let input_data = attributes.data.input.unwrap();
-        assert!(input_data.get("prompt").is_some());
-        assert!(input_data["prompt"].get("context").is_some());
-        assert!(input_data["prompt"]["context"].get("constraints").is_some());
-        assert!(
-            input_data["prompt"]["context"]["constraints"]
-                .as_array()
-                .unwrap()
-                .len()
-                == 3
-        );
-    }
-
-    #[tokio::test]
-    #[ignore = "Integration test requiring OTLP endpoint - run with --ignored"]
-    async fn test_langfuse_integration() -> Result<(), Box<dyn std::error::Error>> {
-        let client = setup_integration_test().await?;
-
-        {
-            // Test 1: Create and send a generation span
-            let generation_attributes = OtelSpanBuilder::new("integration-test-generation")
-                .span_type(OtelSpanType::Generation)
-                .user_id("integration-test-user")
-                .session_id("integration-test-session")
-                .version("1.0.0")
-                .model("gpt-4o")
-                .input(json!({
-                    "messages": [
-                        {"role": "user", "content": "Hello, this is an integration test"}
-                    ]
-                }))
-                .output(json!({
-                    "content": "Hello! This is a response from the integration test."
-                }))
-                .usage({
-                    let mut usage = HashMap::new();
-                    usage.insert("input_tokens".to_string(), 12);
-                    usage.insert("output_tokens".to_string(), 15);
-                    usage.insert("total_tokens".to_string(), 27);
-                    usage
-                })
-                .cost_details({
-                    let mut cost = HashMap::new();
-                    cost.insert("total".to_string(), 0.0001);
-                    cost.insert("input".to_string(), 0.00004);
-                    cost.insert("output".to_string(), 0.00006);
-                    cost
-                })
-                .level("INFO")
-                .tags(vec!["integration".to_string(), "test".to_string()])
-                .build();
-
-            // Start span and perform some work
-            let _span = client
-                .with_span(generation_attributes, async {
-                    tracing::info!("Processing generation request in integration test");
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    tracing::info!("Generation completed in integration test");
-                })
-                .await;
-
-            // Test 2: Create and send an event span
-            let event_attributes = OtelSpanBuilder::new("integration-test-event")
-                .span_type(OtelSpanType::Event)
-                .user_id("integration-test-user")
-                .session_id("integration-test-session")
-                .level("WARNING")
-                .input(json!({
-                    "event_type": "test_execution",
-                    "test_name": "langfuse_integration"
-                }))
-                .metadata({
-                    let mut metadata = HashMap::new();
-                    metadata.insert("test_framework".to_string(), json!("tokio"));
-                    metadata.insert("environment".to_string(), json!("integration"));
-                    metadata
-                })
-                .tags(vec!["event".to_string(), "integration".to_string()])
-                .build();
-
-            let _event_span = client
-                .with_span(event_attributes, async {
-                    tracing::warn!("Test event executed in integration test");
-                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                })
-                .await;
-
-            // Test 3: Create nested spans for trace hierarchy
-            let parent_attributes = OtelSpanBuilder::new("integration-test-parent")
-                .span_type(OtelSpanType::Span)
-                .user_id("integration-test-user")
-                .session_id("integration-test-session")
-                .trace_name("integration-test-trace")
-                .trace_input(json!({"operation": "nested_span_test"}))
-                .trace_tags(vec!["parent".to_string(), "nested".to_string()])
-                .build();
-
-            let _parent_span = client
-                .with_parent_span(parent_attributes, async {
-                    tracing::info!("Starting parent span in integration test");
-
-                    // Child span
-                    let child_attributes = OtelSpanBuilder::new("integration-test-child")
-                        .span_type(OtelSpanType::Generation)
-                        .user_id("integration-test-user")
-                        .session_id("integration-test-session")
-                        .model("gpt-3.5-turbo")
-                        .input(json!({"prompt": "Child span test"}))
-                        .output(json!({"response": "Child span response"}))
-                        .usage({
-                            let mut usage = HashMap::new();
-                            usage.insert("input_tokens".to_string(), 5);
-                            usage.insert("output_tokens".to_string(), 8);
-                            usage.insert("total_tokens".to_string(), 13);
-                            usage
-                        })
-                        .build();
-
-                    let _child_span = client
-                        .with_child_span(
-                            child_attributes,
-                            Some("parent_span_id_456".to_string()),
-                            async {
-                                tracing::info!("Processing child span in integration test");
-                                tokio::time::sleep(std::time::Duration::from_millis(75)).await;
-                            },
-                        )
-                        .await;
-
-                    tracing::info!("Parent span completed in integration test");
-                })
-                .await;
-        }
-        cleanup_integration_test().await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[ignore = "Integration test requiring OTLP endpoint - run with --ignored"]
-    async fn test_comprehensive_generation_span_integration(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let client = setup_integration_test().await?;
-
-        // Create a comprehensive generation span similar to Langfuse server tests
-        let mut model_parameters = HashMap::new();
-        model_parameters.insert("temperature".to_string(), json!(0.7));
-        model_parameters.insert("max_tokens".to_string(), json!(1000));
-        model_parameters.insert("top_p".to_string(), json!(0.9));
-        model_parameters.insert("frequency_penalty".to_string(), json!(0.0));
-        model_parameters.insert("presence_penalty".to_string(), json!(0.0));
-
-        let mut usage = HashMap::new();
-        usage.insert("promptTokens".to_string(), 45);
-        usage.insert("completionTokens".to_string(), 123);
-        usage.insert("totalTokens".to_string(), 168);
-
-        let mut metadata = HashMap::new();
-        metadata.insert("environment".to_string(), json!("production"));
-        metadata.insert("model_version".to_string(), json!("gpt-4-0314"));
-        metadata.insert("request_id".to_string(), json!("req_123456789"));
-        metadata.insert("user_agent".to_string(), json!("rust-client/1.0.0"));
-
-        let input = json!({
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant that provides accurate and concise answers."
-                },
-                {
-                    "role": "user",
-                    "content": "Explain the concept of machine learning in simple terms."
-                }
-            ],
-            "max_tokens": 1000,
-            "temperature": 0.7
-        });
-
-        let output = json!({
-            "choices": [
-                {
-                    "message": {
-                        "role": "assistant",
-                        "content": "Machine learning is a branch of artificial intelligence that enables computers to learn and make decisions from data without being explicitly programmed for every task. Think of it like teaching a computer to recognize patterns, similar to how humans learn from experience."
-                    },
-                    "finish_reason": "stop",
-                    "index": 0
-                }
-            ],
-            "usage": {
-                "prompt_tokens": 45,
-                "completion_tokens": 123,
-                "total_tokens": 168
-            }
-        });
-
-        let attributes = OtelSpanBuilder::new("openai-chat-completion")
-            .span_type(OtelSpanType::Generation)
-            .user_id("user_12345")
-            .session_id("session_abcde")
-            .version("1.2.3")
-            .release("v2024.1")
-            .model("gpt-4")
-            .input(input)
-            .output(output)
-            .model_parameters(model_parameters)
-            .usage(usage)
-            .metadata(metadata)
-            .tags(vec![
-                "production".to_string(),
-                "chat-completion".to_string(),
-                "gpt-4".to_string(),
-            ])
-            .build();
-        {
-            // Send comprehensive span to OTLP endpoint
-            let _span = client
-                .with_span(attributes, async {
-                    tracing::info!("Processing comprehensive generation with all attributes");
-                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                    tracing::info!("Comprehensive generation completed");
-                })
-                .await;
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        }
-        cleanup_integration_test().await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[ignore = "Integration test requiring OTLP endpoint - run with --ignored"]
-    async fn test_event_span_with_large_data_integration() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let client = setup_integration_test().await?;
-
-        // Create an event span with substantial metadata and data
-        let mut metadata = HashMap::new();
-        metadata.insert("event_type".to_string(), json!("user_interaction"));
-        metadata.insert("source".to_string(), json!("web_app"));
-        metadata.insert(
-            "user_agent".to_string(),
-            json!("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"),
-        );
-        metadata.insert("ip_address".to_string(), json!("192.168.1.100"));
-        metadata.insert("timestamp".to_string(), json!("2024-01-15T10:30:00Z"));
-        metadata.insert("request_duration_ms".to_string(), json!(234));
-
-        let event_data = json!({
-            "action": "button_click",
-            "element_id": "submit_form",
-            "page_url": "https://example.com/contact",
-            "form_data": {
-                "name": "John Doe",
-                "email": "john.doe@example.com",
-                "message": "I would like to know more about your services and pricing options."
-            },
-            "user_session": {
-                "session_duration": 1234567,
-                "pages_visited": 5,
-                "previous_page": "https://example.com/about"
-            },
-            "device_info": {
-                "screen_resolution": "1920x1080",
-                "browser": "Chrome",
-                "os": "Windows 10"
-            }
-        });
-
-        let attributes = OtelSpanBuilder::new("user-form-submission")
-            .span_type(OtelSpanType::Event)
-            .user_id("user_67890")
-            .session_id("session_xyz789")
-            .level("INFO")
-            .input(event_data)
-            .metadata(metadata)
-            .tags(vec![
-                "user_interaction".to_string(),
-                "form_submission".to_string(),
-                "web_app".to_string(),
-            ])
-            .build();
-
-        // Send event span to OTLP endpoint
-        let _span = client
-            .with_span(attributes, async {
-                tracing::info!("Processing large event data submission");
-                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-                tracing::info!("Event data processing completed");
-            })
-            .await;
-
-        cleanup_integration_test().await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[ignore = "Integration test requiring OTLP endpoint - run with --ignored"]
-    async fn test_opentelemetry_genai_standard_attributes_integration(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let client = setup_integration_test().await?;
-
-        // Test OpenTelemetry gen_ai.* standard attributes compatibility
-        let mut model_parameters = HashMap::new();
-        model_parameters.insert("temperature".to_string(), json!(0.7));
-        model_parameters.insert("max_tokens".to_string(), json!(2048));
-        model_parameters.insert("top_p".to_string(), json!(0.9));
-        model_parameters.insert("frequency_penalty".to_string(), json!(0.1));
-        model_parameters.insert("presence_penalty".to_string(), json!(0.05));
-
-        let mut usage = HashMap::new();
-        usage.insert("input_tokens".to_string(), 156);
-        usage.insert("output_tokens".to_string(), 234);
-        usage.insert("total_tokens".to_string(), 390);
-
-        let mut cost_details = HashMap::new();
-        cost_details.insert("total".to_string(), 0.0078);
-        cost_details.insert("input".to_string(), 0.00312);
-        cost_details.insert("output".to_string(), 0.00468);
-
-        let attributes = OtelSpanBuilder::new("openai.chat.completions")
-            .span_type(OtelSpanType::Generation)
-            .system("openai")
-            .operation_name("chat")
-            .model("gpt-4-turbo")
-            .input(json!({
-                "messages": [
-                    {"role": "user", "content": "What is LLM Observability?"}
-                ]
-            }))
-            .output(json!({
-                "content": "LLM Observability is the practice of monitoring and analyzing the behavior and performance of large language models."
-            }))
-            .model_parameters(model_parameters)
-            .usage(usage)
-            .cost_details(cost_details)
-            .response_id("chatcmpl-AugxBIoQzz2zFMWFoiyS3Vmm1OuQI")
-            .finish_reasons(vec!["stop".to_string()])
-            .is_stream(false)
-            .openinference_span_kind("LLM")
-            .build();
-
-        // Send span with gen_ai.* standard attributes to OTLP endpoint
-        let _span = client
-            .with_span(attributes, async {
-                tracing::info!("Processing OpenTelemetry gen_ai standard attributes");
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                tracing::info!("OpenTelemetry gen_ai attributes span completed");
-            })
-            .await;
-
-        cleanup_integration_test().await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[ignore = "Integration test requiring OTLP endpoint - run with --ignored"]
-    async fn test_multi_library_compatibility_integration() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let client = setup_integration_test().await?;
-
-        // Test compatibility with multiple OTEL libraries
-        let input_data = json!({
-            "question": "What is the capital of France?",
-            "context": "Geography quiz"
-        });
-
-        let output_data = json!({
-            "answer": "Paris",
-            "confidence": 0.95
-        });
-
-        let attributes = OtelSpanBuilder::new("llm-qa-generation")
-            .span_type(OtelSpanType::Generation)
-            .model("claude-3-opus")
-            .input(input_data)
-            .output(output_data)
-            .system("anthropic")
-            .operation_name("completion")
-            .user_id("test-user-789")
-            .session_id("session-qa-123")
-            .build();
-
-        // Send span that should be compatible with multiple libraries
-        // - Langfuse: langfuse.observation.input, langfuse.observation.output
-        // - Gen AI: gen_ai.prompt, gen_ai.completion
-        // - TraceLoop: traceloop.entity.input, traceloop.entity.output
-        // - MLFlow: mlflow.spanInputs, mlflow.spanOutputs
-        // - SmolAgents: input.value, output.value
-        // - Pydantic: input, output
-        let _span = client
-            .with_span(attributes, async {
-                tracing::info!("Processing multi-library compatibility span");
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                tracing::info!("Multi-library compatibility span completed");
-            })
-            .await;
-
-        cleanup_integration_test().await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[ignore = "Integration test requiring OTLP endpoint - run with --ignored"]
-    async fn test_vendor_specific_otel_spans_integration() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let client = setup_integration_test().await?;
-
-        // Test OpenLit style span
-        let openlit_attributes = OtelSpanBuilder::new("openai.chat.completions")
-            .span_type(OtelSpanType::Generation)
-            .system("openai")
-            .operation_name("chat")
-            .model("gpt-3.5-turbo")
-            .usage({
-                let mut usage = HashMap::new();
-                usage.insert("input_tokens".to_string(), 14);
-                usage.insert("output_tokens".to_string(), 96);
-                usage.insert("total_tokens".to_string(), 110);
-                usage
-            })
-            .cost_details({
-                let mut cost = HashMap::new();
-                cost.insert("total".to_string(), 0.000151);
-                cost
-            })
-            .finish_reasons(vec!["stop".to_string()])
-            .build();
-
-        let _openlit_span = client
-            .with_span(openlit_attributes, async {
-                tracing::info!("Processing OpenLit style span");
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            })
-            .await;
-
-        // Test TraceLoop style span
-        let traceloop_attributes = OtelSpanBuilder::new("openai.chat")
-            .span_type(OtelSpanType::Generation)
-            .model("gpt-3.5-turbo")
-            .input(json!({
-                "messages": [{"role": "user", "content": "What is LLM Observability?"}]
-            }))
-            .output(json!({
-                "content": "LLM Observability is monitoring and analyzing LLM behavior."
-            }))
-            .usage({
-                let mut usage = HashMap::new();
-                usage.insert("completion_tokens".to_string(), 173);
-                usage.insert("prompt_tokens".to_string(), 14);
-                usage.insert("total_tokens".to_string(), 187);
-                usage
-            })
-            .build();
-
-        let _traceloop_span = client
-            .with_span(traceloop_attributes, async {
-                tracing::info!("Processing TraceLoop style span");
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            })
-            .await;
-
-        cleanup_integration_test().await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[ignore = "Integration test requiring OTLP endpoint - run with --ignored"]
-    async fn test_hierarchical_spans_integration() -> Result<(), Box<dyn std::error::Error>> {
-        // Set up the client with OTLP exporter
-        let client = setup_integration_test().await?;
-
-        // Create a complete workflow with hierarchical spans
-        // Root trace with a meaningful name
-        client.with_trace(
-            "customer-support-workflow",
-            None,
-            vec!["support".to_string(), "ai-workflow".to_string(), "integration-test".to_string()],
-            async {
-                tracing::info!("Starting customer support workflow trace");
-
-                // Parent span: Customer inquiry handling
-                let inquiry_attributes = OtelSpanBuilder::new("customer-inquiry")
-                    .span_type(OtelSpanType::Span)
-                    .user_id("customer-12345")
-                    .session_id("session-67890")
-                    .input(json!({
-                        "channel": "email",
-                        "subject": "Product feature inquiry",
-                        "priority": "medium",
-                        "category": "pre-sales",
-                        "timestamp": "2025-05-25T10:30:00Z"
-                    }))
-                    .metadata({
-                        let mut metadata = HashMap::new();
-                        metadata.insert("customer_type".to_string(), json!("prospect"));
-                        metadata.insert("region".to_string(), json!("APAC"));
-                        metadata.insert("language".to_string(), json!("Japanese"));
-                        metadata
-                    })
-                    .tags(vec!["email".to_string(), "pre-sales".to_string()])
-                    .build();
-
-                // Execute parent span with nested children
-                client.with_parent_span(inquiry_attributes, async {
-                    tracing::info!("Processing customer inquiry");
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-                    // Child span 1: Analyze inquiry content with AI
-                    let analysis_attributes = OtelSpanBuilder::new("analyze-inquiry-content")
-                        .span_type(OtelSpanType::Generation)
-                        .model("gpt-4o")
-                        .input(json!({
-                            "messages": [
-                                {
-                                    "role": "system",
-                                    "content": "You are a customer support assistant. Analyze the customer inquiry and identify key points."
-                                },
-                                {
-                                    "role": "user", 
-                                    "content": "I'm interested in your enterprise plan, but I need to know if it supports SSO and has an audit log feature."
-                                }
-                            ]
-                        }))
-                        .output(json!({
-                            "analysis": {
-                                "inquiry_type": "feature_information",
-                                "features_mentioned": ["SSO", "audit_log"],
-                                "product_interest": "enterprise_plan",
-                                "sentiment": "neutral",
-                                "priority": "medium"
-                            }
-                        }))
-                        .usage({
-                            let mut usage = HashMap::new();
-                            usage.insert("input_tokens".to_string(), 78);
-                            usage.insert("output_tokens".to_string(), 53);
-                            usage.insert("total_tokens".to_string(), 131);
-                            usage
-                        })
-                        .cost_details({
-                            let mut cost = HashMap::new();
-                            cost.insert("total".to_string(), 0.00262);
-                            cost
-                        })
-                        .build();
-
-                    client.with_child_span(analysis_attributes, Some("customer-inquiry".to_string()), async {
-                        tracing::info!("Analyzing inquiry content with AI");
-                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                    }).await;
-
-                    // Child span 2: Retrieve product information
-                    let retrieval_attributes = OtelSpanBuilder::new("retrieve-product-info")
-                        .span_type(OtelSpanType::Span)
-                        .input(json!({
-                            "product": "enterprise_plan",
-                            "features_requested": ["SSO", "audit_log"]
-                        }))
-                        .output(json!({
-                            "enterprise_plan": {
-                                "SSO": {
-                                    "supported": true,
-                                    "providers": ["Okta", "Google Workspace", "Azure AD", "Custom SAML"]
-                                },
-                                "audit_log": {
-                                    "supported": true,
-                                    "retention_period": "2 years",
-                                    "export_formats": ["CSV", "JSON"]
-                                }
-                            }
-                        }))
-                        .build();
-
-                    client.with_child_span(retrieval_attributes, Some("customer-inquiry".to_string()), async {
-                        tracing::info!("Retrieving product information from database");
-                        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-                    }).await;
-
-                    // Child span 3: Generate response using RAG
-                    let generation_attributes = OtelSpanBuilder::new("generate-response")
-                        .span_type(OtelSpanType::Generation)
-                        .model("gpt-4o")
-                        .input(json!({
-                            "messages": [
-                                {
-                                    "role": "system",
-                                    "content": "You are a customer support assistant. Use the provided product information to answer the customer's inquiry professionally."
-                                },
-                                {
-                                    "role": "user", 
-                                    "content": "I'm interested in your enterprise plan, but I need to know if it supports SSO and has an audit log feature."
-                                },
-                                {
-                                    "role": "assistant",
-                                    "content": "I'll check our enterprise plan features for SSO and audit log support."
-                                },
-                                {
-                                    "role": "system",
-                                    "content": "Product information: Enterprise plan includes SSO support for Okta, Google Workspace, Azure AD, and custom SAML. It also includes audit logs with 2-year retention and export in CSV or JSON format."
-                                }
-                            ]
-                        }))
-                        .output(json!({
-                            "content": "Thank you for your interest in our Enterprise plan! I'm happy to confirm that our Enterprise plan fully supports Single Sign-On (SSO) with multiple providers including Okta, Google Workspace, Azure AD, and custom SAML implementations.\n\nRegarding audit logs, the Enterprise plan includes comprehensive audit logging features with a 2-year retention period. You can export these logs in either CSV or JSON formats to integrate with your existing security monitoring systems.\n\nWould you like me to provide more specific details about either of these features, or do you have questions about other Enterprise plan capabilities?"
-                        }))
-                        .usage({
-                            let mut usage = HashMap::new();
-                            usage.insert("input_tokens".to_string(), 186);
-                            usage.insert("output_tokens".to_string(), 142);
-                            usage.insert("total_tokens".to_string(), 328);
-                            usage
-                        })
-                        .cost_details({
-                            let mut cost = HashMap::new();
-                            cost.insert("total".to_string(), 0.00656);
-                            cost
-                        })
-                        .build();
-
-                    client.with_child_span(generation_attributes, Some("customer-inquiry".to_string()), async {
-                        tracing::info!("Generating customer response using RAG");
-                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-                    }).await;
-
-                    // Child span 4: Log event for analytics
-                    let event_attributes = OtelSpanBuilder::new("log-interaction")
-                        .span_type(OtelSpanType::Event)
-                        .level("INFO")
-                        .input(json!({
-                            "event_type": "inquiry_response",
-                            "response_time_ms": 600,
-                            "features_addressed": ["SSO", "audit_log"],
-                            "product_discussed": "enterprise_plan"
-                        }))
-                        .build();
-
-                    client.with_child_span(event_attributes, Some("customer-inquiry".to_string()), async {
-                        tracing::info!("Logging interaction for analytics");
-                    }).await;
-                }).await;
-
-                // Add a follow-up span as a sibling to the inquiry (same parent trace)
-                let followup_attributes = OtelSpanBuilder::new("schedule-follow-up")
-                    .span_type(OtelSpanType::Span)
-                    .input(json!({
-                        "customer_id": "customer-12345",
-                        "follow_up_type": "sales_call",
-                        "scheduled_for": "2025-09-17T14:00:00Z",
-                        "assigned_to": "sales-rep-42"
-                    }))
-                    .build();
-
-                client.with_parent_span(followup_attributes, async {
-                    tracing::info!("Scheduling sales follow-up call");
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                }).await;
-
-                tracing::info!("Customer support workflow completed");
-            }
-        ).await;
-
-        // Ensure all spans are exported
-        cleanup_integration_test().await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[ignore = "Integration test requiring OTLP endpoint - run with --ignored"]
-    async fn test_conversation_session_integration() -> Result<(), Box<dyn std::error::Error>> {
-        // Set up the client with OTLP exporter
-        let client = Arc::new(setup_integration_test().await?);
-        
-        // Generate a unique trace ID for this conversation
-        use rand::Rng;
-        let conversation_id = {
-            let mut rng = rand::rng();
-            format!("conversation-{:x}", rng.random::<u64>())
-        };
-       let client_clone = client.clone(); 
-                let client_clone2 = client.clone();
-                let client_clone3 = client.clone();
-                let client_clone4 = client.clone();
-                let client_clone5 = client.clone();
-                let client_clone6 = client.clone();
-                let client_clone7 = client.clone();
-
-        // Use the with_trace method to create a proper trace context
-        client.with_trace(
-            "Travel Planning Assistant",
-            Some(conversation_id.clone()),
-            vec![
-                "conversation".to_string(), 
-                "travel-planning".to_string(), 
-                "multi-turn".to_string()
-            ],
-            async move {
-                tracing::info!("Starting multi-turn conversation trace");
-                
-                // Turn 1: Initial query from user
-                let turn1_attributes = OtelSpanBuilder::new("conversation-turn-1")
-                    .span_type(OtelSpanType::Span)
-                    .user_id("user-integration-test")
-                    .session_id("session-integration-test")
-                    .trace_id(conversation_id.clone())
-                    .input(json!({
-                        "user_query": "I want to plan a two-week trip to Japan in cherry blossom season."
-                    }))
-                    .tags(vec!["turn-1".to_string()])
-                    .build();
-                    
-                let conversation_id_turn1 = conversation_id.clone();
-                client_clone.with_child_span(turn1_attributes, None, async move {
-                    tracing::info!("Processing conversation turn 1");
-                    
-                    // LLM generation for turn 1
-                    let gen1_attributes = OtelSpanBuilder::new("llm-generate-response-1")
-                        .span_type(OtelSpanType::Generation)
-                        .user_id("user-integration-test")
-                        .session_id("session-integration-test")
-                        .trace_id(conversation_id_turn1.clone())
-                        .model("gpt-4o")
-                        .input(json!({
-                            "messages": [
-                                {
-                                    "role": "system",
-                                    "content": "You are a helpful travel assistant specializing in Japan trips."
-                                },
-                                {
-                                    "role": "user",
-                                    "content": "I want to plan a two-week trip to Japan in cherry blossom season."
-                                }
-                            ]
-                        }))
-                        .output(json!({
-                            "content": "Great choice! Cherry blossom (sakura) season in Japan is magical. The best time to visit is typically late March to early April, though it varies by region.\n\nHere's a suggested 2-week itinerary:\n\n**Days 1-4: Tokyo**\n- Ueno Park and Shinjuku Gyoen for cherry blossoms\n- Explore neighborhoods like Shibuya, Harajuku, and Asakusa\n- Day trip to Kamakura\n\n**Days 5-6: Hakone**\n- Mount Fuji views\n- Hot springs (onsen) experience\n- Lake Ashi cruise\n\n**Days 7-10: Kyoto**\n- Philosopher's Path for cherry blossoms\n- Historic temples and shrines\n- Day trip to Nara\n\n**Days 11-12: Osaka**\n- Food adventures\n- Osaka Castle during sakura season\n\n**Days 13-14: Hiroshima and Miyajima**\n- Peace Memorial Park\n- Miyajima Island and the floating torii gate\n\nWould you like me to elaborate on any particular part of the itinerary or provide more specific cherry blossom viewing recommendations?"
-                        }))
-                        .usage({
-                            let mut usage = HashMap::new();
-                            usage.insert("input_tokens".to_string(), 52);
-                            usage.insert("output_tokens".to_string(), 247);
-                            usage.insert("total_tokens".to_string(), 299);
-                            usage
-                        })
-                        .build();
-                        
-                    client_clone2.with_child_span(gen1_attributes, Some("conversation-turn-1".to_string()), async {
-                        tracing::info!("Generating LLM response for turn 1");
-                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-                    }).await;
-                }).await;
-            
-                // Turn 2: Follow-up question from user
-                let turn2_attributes = OtelSpanBuilder::new("conversation-turn-2")
-                    .span_type(OtelSpanType::Span)
-                    .user_id("user-integration-test")
-                    .session_id("session-integration-test")
-                    .trace_id(conversation_id.clone())
-                    .input(json!({
-                        "user_query": "That sounds great! Can you recommend some good hotels in Tokyo and Kyoto that would have cherry blossom views?"
-                    }))
-                    .tags(vec!["turn-2".to_string()])
-                    .build();
-                    
-                let conversation_id_turn2 = conversation_id.clone();
-                client_clone3.with_child_span(turn2_attributes, None, async move {
-                    tracing::info!("Processing conversation turn 2");
-                    
-                    // LLM generation for turn 2
-                    let gen2_attributes = OtelSpanBuilder::new("llm-generate-response-2")
-                        .span_type(OtelSpanType::Generation)
-                        .user_id("user-integration-test")
-                        .session_id("session-integration-test")
-                        .trace_id(conversation_id_turn2.clone())
-                        .model("gpt-4o")
-                        .input(json!({
-                            "messages": [
-                                {
-                                    "role": "system",
-                                    "content": "You are a helpful travel assistant specializing in Japan trips."
-                                },
-                                {
-                                    "role": "user",
-                                    "content": "I want to plan a two-week trip to Japan in cherry blossom season."
-                                },
-                                {
-                                    "role": "assistant",
-                                    "content": "Great choice! Cherry blossom (sakura) season in Japan is magical. The best time to visit is typically late March to early April, though it varies by region.\n\nHere's a suggested 2-week itinerary:\n\n**Days 1-4: Tokyo**\n- Ueno Park and Shinjuku Gyoen for cherry blossoms\n- Explore neighborhoods like Shibuya, Harajuku, and Asakusa\n- Day trip to Kamakura\n\n**Days 5-6: Hakone**\n- Mount Fuji views\n- Hot springs (onsen) experience\n- Lake Ashi cruise\n\n**Days 7-10: Kyoto**\n- Philosopher's Path for cherry blossoms\n- Historic temples and shrines\n- Day trip to Nara\n\n**Days 11-12: Osaka**\n- Food adventures\n- Osaka Castle during sakura season\n\n**Days 13-14: Hiroshima and Miyajima**\n- Peace Memorial Park\n- Miyajima Island and the floating torii gate\n\nWould you like me to elaborate on any particular part of the itinerary or provide more specific cherry blossom viewing recommendations?"
-                                },
-                                {
-                                    "role": "user", 
-                                    "content": "That sounds great! Can you recommend some good hotels in Tokyo and Kyoto that would have cherry blossom views?"
-                                }
-                            ]
-                        }))
-                        .output(json!({
-                            "content": "Here are some hotels in Tokyo and Kyoto known for their cherry blossom views:\n\n**Tokyo Hotels with Cherry Blossom Views:**\n\n1. **Hotel Chinzanso Tokyo**\n   - Features a gorgeous Japanese garden with cherry trees\n   - Luxury property in a peaceful setting\n   - Bunkyo district\n\n2. **Cerulean Tower Tokyu Hotel**\n   - Higher floors offer views of Yoyogi Park's cherry blossoms\n   - Located in vibrant Shibuya\n   \n3. **The Ritz-Carlton, Tokyo**\n   - Upper floors offer panoramic views including Shinjuku Gyoen's cherry trees\n   - Located in Tokyo Midtown complex\n\n4. **Park Hotel Tokyo**\n   - Artist rooms with cherry blossom themes\n   - Views of Shiba Park's cherry trees\n\n**Kyoto Hotels with Cherry Blossom Views:**\n\n1. **The Westin Miyako Kyoto**\n   - Hillside location near the Philosopher's Path\n   - Garden with cherry trees\n   - Eastern Kyoto location\n\n2. **Kyoto Hotel Okura**\n   - Views of the Kamogawa River's cherry tree-lined banks\n   - Central location\n\n3. **Suiran, a Luxury Collection Hotel**\n   - Located along the Hozu River in Arashiyama\n   - Beautiful garden setting with cherry trees\n   - Western Kyoto\n\n4. **Hyatt Regency Kyoto**\n   - Near Maruyama Park (famous for cherry blossoms)\n   - Eastern Kyoto location\n\nTip: Hotels with cherry blossom views book up extremely quickly for sakura season - sometimes 6-12 months in advance. I'd recommend booking as soon as possible if you're set on these properties!"
-                        }))
-                        .usage({
-                            let mut usage = HashMap::new();
-                            usage.insert("input_tokens".to_string(), 354);
-                            usage.insert("output_tokens".to_string(), 318);
-                            usage.insert("total_tokens".to_string(), 672);
-                            usage
-                        })
-                        .build();
-                        
-                    client_clone4.with_child_span(gen2_attributes, Some("conversation-turn-2".to_string()), async {
-                        tracing::info!("Generating LLM response for turn 2");
-                        tokio::time::sleep(std::time::Duration::from_millis(350)).await;
-                    }).await;
-                    }).await;
-            
-                // Turn 3: Specific question about transportation
-                let turn3_attributes = OtelSpanBuilder::new("conversation-turn-3")
-                    .span_type(OtelSpanType::Span)
-                    .user_id("user-integration-test")
-                    .session_id("session-integration-test")
-                    .trace_id(conversation_id.clone())
-                    .input(json!({
-                        "user_query": "What's the best way to travel between these cities? Should I get a JR Pass?"
-                    }))
-                    .tags(vec!["turn-3".to_string()])
-                    .build();
-                    
-                let conversation_id_turn3 = conversation_id.clone();
-                client_clone5.with_child_span(turn3_attributes, None, async move {
-                    tracing::info!("Processing conversation turn 3");
-                    
-                    // Add retrieval step to get transportation information
-                    let retrieval_attributes = OtelSpanBuilder::new("retrieve-transportation-info")
-                        .span_type(OtelSpanType::Span)
-                        .user_id("user-integration-test")
-                        .session_id("session-integration-test")
-                        .trace_id(conversation_id_turn3.clone())
-                        .input(json!({
-                            "query": "Japan transportation between Tokyo, Hakone, Kyoto, Osaka, Hiroshima",
-                            "retrieval_type": "vector_search"
-                        }))
-                        .output(json!({
-                            "transportation_options": {
-                                "jr_pass": {
-                                    "cost": "¥50,000 for 14-day pass",
-                                    "coverage": "Most JR trains including shinkansen (except Nozomi)",
-                                    "recommended_for_itinerary": true
-                                },
-                                "route_info": [
-                                    {"from": "Tokyo", "to": "Hakone", "best_option": "Odakyu Romance Car or JR to Odawara + bus"},
-                                    {"from": "Hakone", "to": "Kyoto", "best_option": "JR Shinkansen from Odawara"},
-                                    {"from": "Kyoto", "to": "Osaka", "best_option": "JR Special Rapid Service (30 min)"},
-                                    {"from": "Osaka", "to": "Hiroshima", "best_option": "JR Shinkansen"}
-                                ]
-                            }
-                        }))
-                        .build();
-                        
-                    client_clone6.with_child_span(retrieval_attributes, Some("conversation-turn-3".to_string()), async {
-                        tracing::info!("Retrieving transportation information");
-                        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-                    }).await;
-                    
-                    // LLM generation for turn 3
-                    let gen3_attributes = OtelSpanBuilder::new("llm-generate-response-3")
-                        .span_type(OtelSpanType::Generation)
-                        .user_id("user-integration-test")
-                        .session_id("session-integration-test")
-                        .trace_id(conversation_id_turn3.clone())
-                        .model("gpt-4o")
-                        .input(json!({
-                            "messages": [
-                                {
-                                    "role": "system",
-                                    "content": "You are a helpful travel assistant specializing in Japan trips. Use the provided transportation information to give accurate advice."
-                                },
-                                {
-                                    "role": "user",
-                                    "content": "What's the best way to travel between these cities? Should I get a JR Pass?"
-                                },
-                                {
-                                    "role": "system",
-                                    "content": "Transportation information: A 14-day JR Pass costs about ¥50,000 and covers most JR trains including shinkansen (except Nozomi). For the Tokyo to Hakone route, use Odakyu Romance Car or JR to Odawara + bus. From Hakone to Kyoto, take the JR Shinkansen from Odawara. Between Kyoto and Osaka, the JR Special Rapid Service takes 30 minutes. From Osaka to Hiroshima, use the JR Shinkansen."
-                                }
-                            ]
-                        }))
-                        .output(json!({
-                            "content": "For your two-week Japan itinerary covering Tokyo, Hakone, Kyoto, Osaka, and Hiroshima, a 14-day Japan Rail (JR) Pass would definitely be worth it!\n\n**JR Pass Details:**\n- Cost: Approximately ¥50,000 (around $350-380 USD) for a 14-day pass\n- This will cover most of your major intercity travel, particularly the expensive shinkansen (bullet train) journeys\n- The pass pays for itself just with the Tokyo-Kyoto-Hiroshima routes alone\n\n**Transportation between cities:**\n\n1. **Tokyo to Hakone:** \n   - The JR Pass doesn't fully cover this route\n   - Best option: Take JR train to Odawara station, then a bus into Hakone\n   - Alternative: The Odakyu Romance Car from Shinjuku (not covered by JR Pass)\n\n2. **Hakone to Kyoto:**\n   - JR Shinkansen from Odawara station (near Hakone)\n   - Fully covered by JR Pass\n   - About 2-2.5 hours\n\n3. **Kyoto to Osaka:**\n   - JR Special Rapid Service\n   - Fully covered by JR Pass\n   - Only 30 minutes\n\n4. **Osaka to Hiroshima:**\n   - JR Shinkansen\n   - Fully covered by JR Pass\n   - About 1.5-2 hours\n\nThe JR Pass also covers many local JR lines within cities, like the Yamanote Line in Tokyo, as well as the JR Nara Line for your day trip to Nara from Kyoto.\n\nOne important note: The JR Pass doesn't cover the fastest category of shinkansen (Nozomi trains), but it covers Hikari and Sakura trains which are only slightly slower and run on the same routes.\n\nI definitely recommend purchasing your JR Pass before arriving in Japan, as it's more expensive if purchased within the country."
-                        }))
-                        .usage({
-                            let mut usage = HashMap::new();
-                            usage.insert("input_tokens".to_string(), 219);
-                            usage.insert("output_tokens".to_string(), 329);
-                            usage.insert("total_tokens".to_string(), 548);
-                            usage
-                        })
-                        .build();
-                        
-                    client_clone6.with_child_span(gen3_attributes, Some("conversation-turn-3".to_string()), async {
-                        tracing::info!("Generating LLM response for turn 3");
-                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-                    }).await;
-                    }).await;
-            
-                // Create an event for conversation completion
-                let completion_event = OtelSpanBuilder::new("conversation-completed")
-                    .span_type(OtelSpanType::Event)
-                    .user_id("user-integration-test")
-                    .session_id("session-integration-test")
-                    .trace_id(conversation_id.clone())
-                    .level("INFO")
-                    .input(json!({
-                        "conversation_turns": 3,
-                        "total_tokens_used": 1519,
-                        "session_duration_ms": 950
-                    }))
-                    .build();
-                    
-                client_clone7.with_child_span(completion_event, None, async {
-                    tracing::info!("Logging conversation completion event");
-                }).await;
-                
-                // Log final conversation summary
-                let trace_output = json!({
-                    "conversation_summary": {
-                        "topic": "Japan travel planning during cherry blossom season",
-                        "subtopics": ["Itinerary planning", "Hotel recommendations", "Transportation options"],
-                        "user_satisfaction": "high",
-                        "turns_completed": 3,
-                        "recommendations_provided": {
-                            "cities": ["Tokyo", "Hakone", "Kyoto", "Osaka", "Hiroshima"],
-                            "hotels": {
-                                "Tokyo": ["Hotel Chinzanso Tokyo", "Cerulean Tower Tokyu Hotel", "The Ritz-Carlton, Tokyo", "Park Hotel Tokyo"],
-                                "Kyoto": ["The Westin Miyako Kyoto", "Kyoto Hotel Okura", "Suiran", "Hyatt Regency Kyoto"]
-                            },
-                            "transportation": "14-day JR Pass (¥50,000)"
-                        }
-                    }
-                });
-                
-                tracing::info!(
-                    trace_output = %serde_json::to_string(&trace_output).unwrap_or_default(),
-                    "Completed travel planning conversation"
-                );
-            }
-        ).await;
-        
-        cleanup_integration_test().await;
-        Ok(())
+}
+
+impl HierarchicalSpanClient for LangfuseOtelClient {
+    fn get_tracer(&self) -> BoxedTracer {
+        self.client.get_tracer()
     }
 }

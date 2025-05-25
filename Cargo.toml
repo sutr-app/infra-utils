@@ -96,8 +96,9 @@ tracing-subscriber = { version = "0.3", features = [
     "json",
 ] }
 
-url = "2"
 unicode-normalization = "0.1"
+url = "2"
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 itertools = "0.14"

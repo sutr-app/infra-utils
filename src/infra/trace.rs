@@ -1,11 +1,10 @@
-use std::fmt::Debug;
-
 use opentelemetry::global;
 use opentelemetry::{
     propagation::Extractor,
     trace::{Span, Tracer},
     KeyValue,
 };
+use std::fmt::Debug;
 use tonic::Request;
 
 pub mod otel_span;
