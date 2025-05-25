@@ -6,6 +6,7 @@ pub mod net;
 pub mod rdb;
 pub mod redis;
 pub mod redis_cluster;
+pub mod trace;
 
 // for test only
 pub mod test {

@@ -8,6 +8,8 @@ use opentelemetry::{
 };
 use tonic::Request;
 
+pub mod otel_span;
+
 struct MetadataMap<'a>(&'a tonic::metadata::MetadataMap);
 
 impl Extractor for MetadataMap<'_> {
@@ -28,6 +30,7 @@ impl Extractor for MetadataMap<'_> {
     }
 }
 
+//https://opentelemetry.io/docs/specs/semconv/general/trace/
 pub trait Tracing {
     fn trace_request<T: Debug>(
         name: &'static str,
