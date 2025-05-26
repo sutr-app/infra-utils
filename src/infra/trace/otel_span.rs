@@ -58,7 +58,6 @@ pub struct OtelSpanData {
 pub struct OtelSpanAttributes {
     pub span_type: OtelSpanType,
     pub name: String,
-    pub span_id: Option<String>, // Span ID for referencing in parent/child relationships
     pub user_id: Option<String>,
     pub session_id: Option<String>,
     pub version: Option<String>,
@@ -70,8 +69,6 @@ pub struct OtelSpanAttributes {
     pub usage: Option<HashMap<String, i64>>,
     pub level: Option<String>,
     pub status_message: Option<String>,
-    pub parent_observation_id: Option<String>,
-    pub trace_id: Option<String>,
     pub trace_name: Option<String>,
     pub trace_input: Option<serde_json::Value>,
     pub trace_output: Option<serde_json::Value>,
@@ -96,7 +93,6 @@ impl Default for OtelSpanAttributes {
         Self {
             span_type: OtelSpanType::Span,
             name: String::new(),
-            span_id: None,
             user_id: None,
             session_id: None,
             version: None,
@@ -112,8 +108,6 @@ impl Default for OtelSpanAttributes {
             usage: None,
             level: None,
             status_message: None,
-            parent_observation_id: None,
-            trace_id: None,
             trace_name: None,
             trace_input: None,
             trace_output: None,
@@ -616,16 +610,6 @@ impl GenAIOtelClient for GenericOtelClient {
             ));
         }
 
-        if let Some(parent_observation_id) = attributes.parent_observation_id {
-            key_values.push(KeyValue::new("parent_id", parent_observation_id.clone()));
-            key_values.push(KeyValue::new("parentId", parent_observation_id.clone()));
-            key_values.push(KeyValue::new("parent.id", parent_observation_id.clone()));
-            key_values.push(KeyValue::new(
-                "langfuse.observation.parent_observation_id",
-                parent_observation_id,
-            ));
-        }
-
         // Input/output data as JSON strings and gen_ai.prompt/completion attributes
         if let Some(ref input) = attributes.data.input {
             if let Ok(input_str) = serde_json::to_string(input) {
@@ -733,22 +717,6 @@ impl GenAIOtelClient for GenericOtelClient {
                 "langfuse.observation.completion_start_time",
                 completion_start_time,
             ));
-        }
-
-        // Trace-level attributes
-        if let Some(trace_id) = &attributes.trace_id {
-            key_values.push(KeyValue::new("trace.id", trace_id.clone()));
-            // For compatibility with OpenTelemetry standard
-            key_values.push(KeyValue::new("trace_id", trace_id.clone()));
-        }
-
-        // Add explicit span_id if provided - important for hierarchical spans
-        if let Some(span_id) = &attributes.span_id {
-            key_values.push(KeyValue::new("span.id", span_id.clone()));
-            // Also add for other systems' compatibility
-            key_values.push(KeyValue::new("span_id", span_id.clone()));
-            key_values.push(KeyValue::new("spanId", span_id.clone()));
-            key_values.push(KeyValue::new("langfuse.observation.id", span_id.clone()));
         }
 
         if let Some(trace_name) = attributes.trace_name {
@@ -1007,16 +975,6 @@ impl OtelSpanBuilder {
         self
     }
 
-    pub fn parent_observation_id(mut self, id: impl Into<String>) -> Self {
-        self.attributes.parent_observation_id = Some(id.into());
-        self
-    }
-
-    pub fn trace_id(mut self, id: impl Into<String>) -> Self {
-        self.attributes.trace_id = Some(id.into());
-        self
-    }
-
     pub fn trace_name(mut self, name: impl Into<String>) -> Self {
         self.attributes.trace_name = Some(name.into());
         self
@@ -1094,11 +1052,6 @@ impl OtelSpanBuilder {
 
     pub fn openinference_span_kind(mut self, span_kind: impl Into<String>) -> Self {
         self.attributes.openinference_span_kind = Some(span_kind.into());
-        self
-    }
-
-    pub fn span_id(mut self, span_id: impl Into<String>) -> Self {
-        self.attributes.span_id = Some(span_id.into());
         self
     }
 
@@ -1249,7 +1202,6 @@ pub trait HierarchicalSpanClient: GenAIOtelClient {
     async fn with_trace<F, T>(
         &self,
         trace_name: impl Into<String>,
-        trace_id: Option<String>,
         tags: Vec<String>,
         f: F,
     ) -> T
@@ -1257,15 +1209,10 @@ pub trait HierarchicalSpanClient: GenAIOtelClient {
         F: std::future::Future<Output = T> + Send,
     {
         // Create trace span attributes
-        let mut trace_attributes = OtelSpanBuilder::new(trace_name)
+        let trace_attributes = OtelSpanBuilder::new(trace_name)
             .span_type(OtelSpanType::Span)
             .trace_tags(tags)
             .build();
-
-        // Set trace_id if provided
-        if let Some(id) = trace_id {
-            trace_attributes.trace_id = Some(id);
-        }
 
         // Execute with trace context
         self.with_parent_span(trace_attributes, f).await

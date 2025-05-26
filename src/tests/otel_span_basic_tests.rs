@@ -103,7 +103,6 @@ async fn test_nested_spans() -> Result<(), Box<dyn std::error::Error>> {
             // Create first child span
             let child1_attributes = OtelSpanBuilder::new("child-span-1")
                 .span_type(OtelSpanType::Event)
-                .parent_observation_id("parent-span") // Link to parent
                 .tags(vec!["child".to_string()])
                 .build();
 
@@ -117,7 +116,6 @@ async fn test_nested_spans() -> Result<(), Box<dyn std::error::Error>> {
             // Create second child span
             let child2_attributes = OtelSpanBuilder::new("child-span-2")
                 .span_type(OtelSpanType::Generation)
-                .parent_observation_id("parent-span") // Link to parent
                 .model("gpt-4")
                 .input(json!({"prompt": "Test prompt in child span"}))
                 .build();
@@ -131,7 +129,6 @@ async fn test_nested_spans() -> Result<(), Box<dyn std::error::Error>> {
                     // Create grandchild span
                     let grandchild_attributes = OtelSpanBuilder::new("grandchild-span")
                         .span_type(OtelSpanType::Event)
-                        .parent_observation_id("child-span-2") // Link to parent
                         .tags(vec!["grandchild".to_string()])
                         .build();
 
@@ -161,7 +158,7 @@ async fn test_trace_with_spans() -> Result<(), Box<dyn std::error::Error>> {
         .clone()
         .with_trace(
             "test-conversation-flow",
-            Some("test-trace-id-123".to_string()), // Provide explicit trace ID
+            // Provide explicit trace ID
             vec!["test".to_string(), "conversation".to_string()],
             async move {
                 tracing::info!("Starting conversation flow trace");
@@ -169,7 +166,6 @@ async fn test_trace_with_spans() -> Result<(), Box<dyn std::error::Error>> {
                 // Step 1: User input processing
                 let input_attributes = OtelSpanBuilder::new("process-user-input")
                     .span_type(OtelSpanType::Span)
-                    .trace_id("test-trace-id-123") // Link to trace
                     .input(
                         json!({"user_input": "Hello, how can you help me with Rust programming?"}),
                     )
@@ -185,7 +181,6 @@ async fn test_trace_with_spans() -> Result<(), Box<dyn std::error::Error>> {
                 // Step 2: LLM generation
                 let generation_attributes = OtelSpanBuilder::new("generate-llm-response")
                     .span_type(OtelSpanType::Generation)
-                    .trace_id("test-trace-id-123") // Link to trace
                     .model("gpt-4")
                     .input(json!({"prompt": "Help with Rust programming"}))
                     .output(
@@ -203,7 +198,6 @@ async fn test_trace_with_spans() -> Result<(), Box<dyn std::error::Error>> {
                 // Step 3: Response formatting
                 let formatting_attributes = OtelSpanBuilder::new("format-response")
                     .span_type(OtelSpanType::Span)
-                    .trace_id("test-trace-id-123") // Link to trace
                     .build();
 
                 client

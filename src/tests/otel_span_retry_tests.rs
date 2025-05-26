@@ -14,6 +14,10 @@ async fn test_retry_workflow_with_parent_child_spans() -> Result<(), Box<dyn std
     // Initialize the Otel client
     let client = Arc::new(setup_integration_test().await?);
 
+    // Define common identifiers for tracing
+    let user_id = "test-user-123";
+    let session_id = "test-session-456";
+
     // Define a custom error type for our test
     #[derive(Debug)]
     struct RetryableError {
@@ -36,6 +40,8 @@ async fn test_retry_workflow_with_parent_child_spans() -> Result<(), Box<dyn std
     // Create a parent span for the entire retry operation
     let parent_attributes = OtelSpanBuilder::new("llm-generation-with-retry")
         .span_type(OtelSpanType::Span)
+        .user_id(user_id)
+        .session_id(session_id)
         .tags(vec!["retry-workflow".to_string()])
         .input(json!({
             "operation": "text-generation",
@@ -49,7 +55,6 @@ async fn test_retry_workflow_with_parent_child_spans() -> Result<(), Box<dyn std
         .with_span(parent_attributes, async move {
             // Get the parent span context - in a real application, you would store this
             // or pass it to the retry function to establish the relationship
-            let parent_span_id = "parent-operation-span";
             let max_retries = 3;
             let retry_count = Arc::new(Mutex::new(0));
 
@@ -75,7 +80,8 @@ async fn test_retry_workflow_with_parent_child_spans() -> Result<(), Box<dyn std
                     OtelSpanBuilder::new(format!("generation-attempt-{}", attempt_num))
                         .span_type(OtelSpanType::Generation)
                         .model("gpt-4")
-                        .parent_observation_id(parent_span_id.to_string()) // This establishes the parent-child relationship
+                        .user_id(user_id)
+                        .session_id(session_id)
                         .input(json!({
                             "prompt": "Generate a response",
                             "attempt": attempt_num,
@@ -117,7 +123,8 @@ async fn test_retry_workflow_with_parent_child_spans() -> Result<(), Box<dyn std
                         let success_attributes = OtelSpanBuilder::new("generation-success")
                             .span_type(OtelSpanType::Event)
                             .level("INFO")
-                            .parent_observation_id(parent_span_id.to_string()) // Child of parent operation
+                            .user_id(user_id)
+                            .session_id(session_id)
                             .input(json!({
                                 "final_attempt": final_count + 1,
                                 "response": response
@@ -153,7 +160,8 @@ async fn test_retry_workflow_with_parent_child_spans() -> Result<(), Box<dyn std
                                 OtelSpanBuilder::new(format!("retry-{}", current_retry))
                                     .span_type(OtelSpanType::Event)
                                     .level("WARNING")
-                                    .parent_observation_id(parent_span_id.to_string()) // Child of parent operation
+                                    .user_id(user_id)
+                                    .session_id(session_id)
                                     .input(json!({
                                         "retry_count": current_retry,
                                         "max_retries": max_retries,
@@ -183,7 +191,8 @@ async fn test_retry_workflow_with_parent_child_spans() -> Result<(), Box<dyn std
                             let error_attributes = OtelSpanBuilder::new("generation-failed")
                                 .span_type(OtelSpanType::Event)
                                 .level("ERROR")
-                                .parent_observation_id(parent_span_id.to_string()) // Child of parent operation
+                                .user_id(user_id)
+                                .session_id(session_id)
                                 .input(json!({
                                     "final_attempt": current_retry,
                                     "error": final_error.to_string()
@@ -217,6 +226,10 @@ async fn test_retry_workflow_with_parent_child_spans() -> Result<(), Box<dyn std
 async fn test_reusable_retry_function() -> Result<(), Box<dyn std::error::Error>> {
     let client = Arc::new(setup_integration_test().await?);
 
+    // Define common identifiers for tracing
+    let user_id = "test-user-123";
+    let session_id = "test-session-456";
+
     // Define a helper retry function
     async fn with_retry<F, Fut, T, E>(
         client: Arc<GenericOtelClient>,
@@ -225,6 +238,8 @@ async fn test_reusable_retry_function() -> Result<(), Box<dyn std::error::Error>
         retry_delay_ms: u64,
         model: Option<String>,
         input: serde_json::Value,
+        user_id: Option<String>,
+        session_id: Option<String>,
         operation_fn: F,
     ) -> Result<T, Box<dyn std::error::Error + Send + Sync>>
     where
@@ -250,7 +265,18 @@ async fn test_reusable_retry_function() -> Result<(), Box<dyn std::error::Error>
                 .build();
         }
 
-        let parent_span_id = format!("{}-operation", operation_name);
+        // Add user and session IDs if provided
+        if let Some(uid) = &user_id {
+            parent_attributes = OtelSpanBuilder::from_attributes(parent_attributes)
+                .user_id(uid.clone())
+                .build();
+        }
+
+        if let Some(sid) = &session_id {
+            parent_attributes = OtelSpanBuilder::from_attributes(parent_attributes)
+                .session_id(sid.clone())
+                .build();
+        }
 
         // Start parent span and execute retry logic
         return client
@@ -263,7 +289,6 @@ async fn test_reusable_retry_function() -> Result<(), Box<dyn std::error::Error>
                     let mut attempt_attributes =
                         OtelSpanBuilder::new(format!("{}-attempt-{}", operation_name, attempt + 1))
                             .span_type(OtelSpanType::Generation)
-                            .parent_observation_id(parent_span_id.clone()) // Link to parent
                             .input(json!({
                                 "attempt": attempt + 1,
                                 "max_retries": max_retries,
@@ -292,16 +317,30 @@ async fn test_reusable_retry_function() -> Result<(), Box<dyn std::error::Error>
                     match result {
                         Ok(value) => {
                             // Success! Record the successful attempt
-                            let success_attributes =
+                            let mut success_attributes =
                                 OtelSpanBuilder::new(format!("{}-success", operation_name))
                                     .span_type(OtelSpanType::Event)
                                     .level("INFO")
-                                    .parent_observation_id(parent_span_id.clone())
                                     .input(json!({
                                         "final_attempt": attempt + 1,
                                         "success": true
                                     }))
                                     .build();
+
+                            // Add user and session IDs if provided
+                            if let Some(uid) = &user_id {
+                                success_attributes =
+                                    OtelSpanBuilder::from_attributes(success_attributes)
+                                        .user_id(uid.clone())
+                                        .build();
+                            }
+
+                            if let Some(sid) = &session_id {
+                                success_attributes =
+                                    OtelSpanBuilder::from_attributes(success_attributes)
+                                        .session_id(sid.clone())
+                                        .build();
+                            }
 
                             client
                                 .with_span(success_attributes, async move {
@@ -324,19 +363,33 @@ async fn test_reusable_retry_function() -> Result<(), Box<dyn std::error::Error>
 
                             if attempt < max_retries {
                                 // Record retry event
-                                let retry_attributes = OtelSpanBuilder::new(format!(
+                                let mut retry_attributes = OtelSpanBuilder::new(format!(
                                     "{}-retry-{}",
                                     operation_name, attempt
                                 ))
                                 .span_type(OtelSpanType::Event)
                                 .level("WARNING")
-                                .parent_observation_id(parent_span_id.clone())
                                 .input(json!({
                                     "attempt": attempt,
                                     "next_attempt": attempt + 1,
                                     "delay_ms": retry_delay_ms
                                 }))
                                 .build();
+
+                                // Add user and session IDs if provided
+                                if let Some(uid) = &user_id {
+                                    retry_attributes =
+                                        OtelSpanBuilder::from_attributes(retry_attributes)
+                                            .user_id(uid.clone())
+                                            .build();
+                                }
+
+                                if let Some(sid) = &session_id {
+                                    retry_attributes =
+                                        OtelSpanBuilder::from_attributes(retry_attributes)
+                                            .session_id(sid.clone())
+                                            .build();
+                                }
 
                                 let opname = operation_name.clone();
                                 client
@@ -361,15 +414,28 @@ async fn test_reusable_retry_function() -> Result<(), Box<dyn std::error::Error>
                 }
 
                 // If we get here, all retries failed
-                let failure_attributes = OtelSpanBuilder::new(format!("{}-failed", operation_name))
-                    .span_type(OtelSpanType::Event)
-                    .level("ERROR")
-                    .parent_observation_id(parent_span_id.clone())
-                    .input(json!({
-                        "max_attempts_reached": true,
-                        "attempts": max_retries
-                    }))
-                    .build();
+                let mut failure_attributes =
+                    OtelSpanBuilder::new(format!("{}-failed", operation_name))
+                        .span_type(OtelSpanType::Event)
+                        .level("ERROR")
+                        .input(json!({
+                            "max_attempts_reached": true,
+                            "attempts": max_retries
+                        }))
+                        .build();
+
+                // Add user and session IDs if provided
+                if let Some(uid) = &user_id {
+                    failure_attributes = OtelSpanBuilder::from_attributes(failure_attributes)
+                        .user_id(uid.clone())
+                        .build();
+                }
+
+                if let Some(sid) = &session_id {
+                    failure_attributes = OtelSpanBuilder::from_attributes(failure_attributes)
+                        .session_id(sid.clone())
+                        .build();
+                }
 
                 client
                     .clone()
@@ -399,6 +465,8 @@ async fn test_reusable_retry_function() -> Result<(), Box<dyn std::error::Error>
         200,
         Some("gpt-4".to_string()),
         json!({"prompt": "Test prompt"}),
+        Some(user_id.to_string()),
+        Some(session_id.to_string()),
         |attempt| async move {
             // Simulate API call that succeeds on the third attempt
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -428,11 +496,17 @@ async fn test_reusable_retry_function() -> Result<(), Box<dyn std::error::Error>
 async fn test_structured_retry_workflow() -> Result<(), Box<dyn std::error::Error>> {
     let client = Arc::new(setup_integration_test().await?);
 
+    // Define common identifiers for tracing
+    let user_id = "test-user-123";
+    let session_id = "test-session-456";
+
     /// Create a structured retry workflow to group related spans
     async fn execute_with_retry_workflow<F, Fut, T, E>(
         client: Arc<GenericOtelClient>,
         workflow_name: impl Into<String>,
         max_retries: u32,
+        user_id: Option<&str>,
+        session_id: Option<&str>,
         operation_fn: F,
     ) -> Result<T, Box<dyn std::error::Error + Send + Sync>>
     where
@@ -448,16 +522,31 @@ async fn test_structured_retry_workflow() -> Result<(), Box<dyn std::error::Erro
         let workflow_name = workflow_name.into();
 
         // Create parent span for the entire workflow
-        let parent_attributes = OtelSpanBuilder::new(format!("{}", workflow_name))
+        let mut parent_attributes = OtelSpanBuilder::new(format!("{}", workflow_name))
             .span_type(OtelSpanType::Span)
             .tags(vec!["workflow".to_string(), "retry".to_string()])
-            .trace_id(workflow_id.clone()) // Use trace_id for linking spans
             .input(json!({
                 "workflow": workflow_name,
                 "max_retries": max_retries
             }))
             .build();
 
+        // Add user and session IDs if provided
+        if let Some(uid) = user_id {
+            parent_attributes = OtelSpanBuilder::from_attributes(parent_attributes)
+                .user_id(uid)
+                .build();
+        }
+
+        if let Some(sid) = session_id {
+            parent_attributes = OtelSpanBuilder::from_attributes(parent_attributes)
+                .session_id(sid)
+                .build();
+        }
+
+        let client_clone = client.clone();
+        let user_id_clone = user_id.map(|s| s.to_string());
+        let session_id_clone = session_id.map(|s| s.to_string());
         client
             .clone()
             .with_span(parent_attributes, async move {
@@ -466,26 +555,37 @@ async fn test_structured_retry_workflow() -> Result<(), Box<dyn std::error::Erro
 
                 while retry_count < max_retries {
                     // Create attempt span with parent relationship
-                    let attempt_attributes = OtelSpanBuilder::new(format!(
+                    let mut attempt_attributes = OtelSpanBuilder::new(format!(
                         "{}-attempt-{}",
                         workflow_name,
                         retry_count + 1
                     ))
                     .span_type(OtelSpanType::Generation)
-                    .trace_id(workflow_id.clone()) // Link to workflow
-                    .parent_observation_id(workflow_id.clone()) // Use workflow_id as parent
                     .input(json!({
                         "attempt": retry_count + 1,
                         "max_retries": max_retries
                     }))
                     .build();
 
+                    // Add user and session IDs if provided
+                    if let Some(uid) = user_id_clone.clone() {
+                        attempt_attributes = OtelSpanBuilder::from_attributes(attempt_attributes)
+                            .user_id(uid)
+                            .build();
+                    }
+
+                    if let Some(sid) = session_id_clone.clone() {
+                        attempt_attributes = OtelSpanBuilder::from_attributes(attempt_attributes)
+                            .session_id(sid)
+                            .build();
+                    }
+
+                    let client_clone_l = client_clone.clone();
                     // Execute the attempt with its own span
                     let op_fn = operation_fn.clone();
                     let current_attempt = retry_count;
                     let wid = workflow_id.clone();
-                    let attempt_result = client
-                        .clone()
+                    let attempt_result = client_clone_l
                         .with_span_result(attempt_attributes, async move {
                             op_fn(current_attempt, wid).await
                         })
@@ -494,20 +594,30 @@ async fn test_structured_retry_workflow() -> Result<(), Box<dyn std::error::Erro
                     match attempt_result {
                         Ok(result) => {
                             // Success - log event and return result
-                            let success_event =
+                            let mut success_event =
                                 OtelSpanBuilder::new(format!("{}-success", workflow_name))
                                     .span_type(OtelSpanType::Event)
                                     .level("INFO")
-                                    .trace_id(workflow_id.clone())
-                                    .parent_observation_id(workflow_id.clone())
                                     .input(json!({
                                         "workflow": workflow_name,
                                         "successful_attempt": retry_count + 1
                                     }))
                                     .build();
 
-                            client
-                                .clone()
+                            // Add user and session IDs if provided
+                            if let Some(uid) = user_id_clone {
+                                success_event = OtelSpanBuilder::from_attributes(success_event)
+                                    .user_id(uid)
+                                    .build();
+                            }
+
+                            if let Some(sid) = session_id_clone {
+                                success_event = OtelSpanBuilder::from_attributes(success_event)
+                                    .session_id(sid)
+                                    .build();
+                            }
+
+                            client_clone_l
                                 .with_span(success_event, async move {
                                     tracing::info!(
                                         workflow = %workflow_name,
@@ -533,8 +643,6 @@ async fn test_structured_retry_workflow() -> Result<(), Box<dyn std::error::Erro
                                 ))
                                 .span_type(OtelSpanType::Event)
                                 .level("WARNING")
-                                .trace_id(workflow_id.clone())
-                                .parent_observation_id(workflow_id.clone())
                                 .input(json!({
                                     "workflow": workflow_name,
                                     "retry_count": retry_count,
@@ -543,8 +651,7 @@ async fn test_structured_retry_workflow() -> Result<(), Box<dyn std::error::Erro
                                 .build();
 
                                 let wname = workflow_name.clone();
-                                client
-                                    .clone()
+                                client_clone_l
                                     .with_span(retry_event, async move {
                                         tracing::warn!(
                                             workflow = %wname,
@@ -566,8 +673,6 @@ async fn test_structured_retry_workflow() -> Result<(), Box<dyn std::error::Erro
                 let failure_event = OtelSpanBuilder::new(format!("{}-failed", workflow_name))
                     .span_type(OtelSpanType::Event)
                     .level("ERROR")
-                    .trace_id(workflow_id.clone())
-                    .parent_observation_id(workflow_id.clone())
                     .input(json!({
                         "workflow": workflow_name,
                         "max_retries_exceeded": true,
@@ -576,8 +681,7 @@ async fn test_structured_retry_workflow() -> Result<(), Box<dyn std::error::Erro
                     .build();
 
                 let wname = workflow_name.clone();
-                client
-                    .clone()
+                client_clone
                     .with_span(failure_event, async move {
                         tracing::error!(
                             workflow = %wname,
@@ -601,6 +705,8 @@ async fn test_structured_retry_workflow() -> Result<(), Box<dyn std::error::Erro
         client_clone.clone(),
         "llm-chat-completion",
         3,
+        Some(user_id),
+        Some(session_id),
         move |attempt, workflow_id| {
             let client_clone2 = client_clone.clone();
             async move {
@@ -611,8 +717,6 @@ async fn test_structured_retry_workflow() -> Result<(), Box<dyn std::error::Erro
                 let child_attributes =
                     OtelSpanBuilder::new(format!("tokenize-input-{}", attempt + 1))
                         .span_type(OtelSpanType::Span)
-                        .trace_id(workflow_id.clone())
-                        .parent_observation_id(workflow_id)
                         .input(json!({"sub_operation": "tokenize", "attempt": attempt + 1}))
                         .build();
 

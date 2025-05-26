@@ -11,14 +11,11 @@ use uuid::Uuid;
 async fn test_error_handling_integration() -> Result<(), Box<dyn std::error::Error>> {
     let client = setup_integration_test().await?;
     let session_id = Uuid::new_v4().to_string();
-    let parent_id = Uuid::new_v4().to_string();
     let trace_id = Uuid::new_v4().to_string();
 
     // Test 1: Handle a simulated API error
     let error_attributes = OtelSpanBuilder::new("api-call-with-error")
         .session_id(session_id.clone())
-        .trace_id(trace_id.clone())
-        .parent_observation_id(parent_id.clone())
         .span_type(OtelSpanType::Generation)
         .model("gpt-4")
         .input(json!({"prompt": "Test prompt that will fail"}))
@@ -58,8 +55,6 @@ async fn test_error_handling_integration() -> Result<(), Box<dyn std::error::Err
     // Test 2: Handle a timeout error
     let timeout_attributes = OtelSpanBuilder::new("slow-operation-with-timeout")
         .session_id(session_id.clone())
-        .trace_id(trace_id.clone())
-        .parent_observation_id(parent_id.clone())
         .span_type(OtelSpanType::Generation)
         .model("claude-3")
         .input(json!({"prompt": "This will take too long"}))
@@ -95,8 +90,6 @@ async fn test_error_handling_integration() -> Result<(), Box<dyn std::error::Err
     for i in 1..=3 {
         let error_attributes = OtelSpanBuilder::new(format!("batch-error-{}", i))
             .session_id(session_id.clone())
-            .trace_id(trace_id.clone())
-            .parent_observation_id(parent_id.clone())
             .span_type(OtelSpanType::Event)
             .level("ERROR")
             .build();
