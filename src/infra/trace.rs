@@ -1,12 +1,11 @@
 use opentelemetry::propagation::Injector;
-use opentelemetry::trace::{SpanKind, SpanRef, TraceContextExt};
+use opentelemetry::trace::{SpanKind, TraceContextExt};
 use opentelemetry::{global, Context};
 use opentelemetry::{
     propagation::Extractor,
     trace::{Span, Tracer},
     KeyValue,
 };
-use opentelemetry_semantic_conventions::attribute;
 use std::fmt::Debug;
 use tonic::Request;
 

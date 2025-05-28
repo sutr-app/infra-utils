@@ -1,8 +1,6 @@
 //! Integration tests for remote child span functionality with distributed tracing
 use super::test_utils::*;
-use crate::infra::trace::attr::{
-    OtelSpanAttributes, OtelSpanBuilder, OtelSpanType,
-};
+use crate::infra::trace::attr::{OtelSpanAttributes, OtelSpanBuilder, OtelSpanType};
 use crate::infra::trace::otel_span::*;
 use serde_json::json;
 use std::collections::HashMap;

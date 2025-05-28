@@ -42,7 +42,7 @@ async fn test_basic_span_creation() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     client
-        .with_span_result(detailed_attributes,Some(context.clone()),  async {
+        .with_span_result(detailed_attributes, Some(context.clone()), async {
             tracing::info!("Inside a detailed test span");
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             Ok::<(), std::io::Error>(())
@@ -137,7 +137,7 @@ async fn test_nested_spans() -> Result<(), Box<dyn std::error::Error>> {
 
             let client_clone2 = client_clone.clone();
             client_clone
-                .with_span_result(child2_attributes,None,  async move {
+                .with_span_result(child2_attributes, None, async move {
                     tracing::info!("Inside second child span");
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
@@ -148,7 +148,7 @@ async fn test_nested_spans() -> Result<(), Box<dyn std::error::Error>> {
                         .build();
 
                     client_clone2
-                        .with_span_result(grandchild_attributes,None,  async {
+                        .with_span_result(grandchild_attributes, None, async {
                             tracing::info!("Inside grandchild span");
                             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                             Ok::<(), std::io::Error>(())

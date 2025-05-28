@@ -1,6 +1,6 @@
 use super::attr::{OtelSpanAttributes, OtelSpanBuilder, OtelSpanType};
 use opentelemetry::{
-    global::{self, BoxedTracer},
+    global::BoxedTracer,
     trace::{Span, SpanBuilder},
     Context,
 };

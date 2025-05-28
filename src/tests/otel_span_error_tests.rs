@@ -6,7 +6,6 @@ use crate::infra::trace::{
     otel_span::*,
 };
 use serde_json::json;
-use uuid::Uuid;
 
 /// Test error chain handling in spans
 #[tokio::test]
@@ -72,7 +71,7 @@ async fn test_error_chain_handling_integration() -> Result<(), Box<dyn std::erro
         .build();
 
     let result: Result<String, TopError> = client
-        .with_span_result(error_chain_attributes,None,  async {
+        .with_span_result(error_chain_attributes, None, async {
             let root_error = RootError {
                 message: "Network connection failed".to_string(),
             };
