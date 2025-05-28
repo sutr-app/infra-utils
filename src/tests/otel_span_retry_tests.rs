@@ -1,7 +1,11 @@
 //! Retry workflow integration tests for OpenTelemetry tracing
 //! These tests demonstrate how to implement proper span hierarchy for retry operations
 use super::test_utils::*;
-use crate::infra::trace::otel_span::*;
+use crate::infra::trace::{
+    attr::{OtelSpanBuilder, OtelSpanType},
+    impls::GenericOtelClient,
+    otel_span::*,
+};
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -47,12 +51,10 @@ async fn test_retry_workflow_with_parent_child_spans() -> Result<(), Box<dyn std
             "operation": "text-generation",
             "max_retries": 3
         }))
-        .build();
-
-    // Execute the retry workflow with proper parent-child span hierarchy
+        .build(); // Execute the retry workflow with proper parent-child span hierarchy
     client
         .clone()
-        .with_span(parent_attributes, async move {
+        .with_span_result(parent_attributes, None, async move {
             // Get the parent span context - in a real application, you would store this
             // or pass it to the retry function to establish the relationship
             let max_retries = 3;
@@ -94,7 +96,7 @@ async fn test_retry_workflow_with_parent_child_spans() -> Result<(), Box<dyn std
 
                 // Execute the attempt as a child span
                 let result: Result<serde_json::Value, RetryableError> = client
-                    .with_span_result(attempt_attributes, async move {
+                    .with_span_result(attempt_attributes, None, async move {
                         // Simulate some work
                         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
@@ -132,13 +134,17 @@ async fn test_retry_workflow_with_parent_child_spans() -> Result<(), Box<dyn std
                             .build();
 
                         client
-                            .with_span(success_attributes, async move {
+                            .with_span_result(success_attributes, None, async move {
                                 tracing::info!(
                                     attempt = final_count + 1,
                                     "LLM generation succeeded after retries"
                                 );
+                                Ok::<(), std::io::Error>(())
                             })
-                            .await;
+                            .await
+                            .unwrap_or_else(|e| {
+                                tracing::error!("Error in success span: {}", e);
+                            });
 
                         break;
                     }
@@ -170,14 +176,18 @@ async fn test_retry_workflow_with_parent_child_spans() -> Result<(), Box<dyn std
                                     .build();
 
                             client
-                                .with_span(retry_attributes, async move {
+                                .with_span_result(retry_attributes, None, async move {
                                     tracing::warn!(
                                         retry_count = current_retry,
                                         max_retries = max_retries,
                                         "Retrying LLM generation after error"
                                     );
+                                    Ok::<(), std::io::Error>(())
                                 })
-                                .await;
+                                .await
+                                .unwrap_or_else(|e| {
+                                    tracing::error!("Error in retry span: {}", e);
+                                });
 
                             // Wait before retry
                             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -200,21 +210,27 @@ async fn test_retry_workflow_with_parent_child_spans() -> Result<(), Box<dyn std
                                 .build();
 
                             client
-                                .with_span(error_attributes, async move {
+                                .with_span_result(error_attributes, None, async move {
                                     tracing::error!(
                                         error = %final_error,
                                         "LLM generation failed after all retry attempts"
                                     );
+                                    Ok::<(), std::io::Error>(())
                                 })
-                                .await;
+                                .await
+                                .unwrap_or_else(|e| {
+                                    tracing::error!("Error in error span: {}", e);
+                                });
                         }
                     }
                 }
             }
 
             tracing::info!("Retry workflow complete");
+            Ok::<(), std::io::Error>(())
         })
-        .await;
+        .await
+        .unwrap();
 
     cleanup_integration_test().await;
     Ok(())
@@ -231,6 +247,7 @@ async fn test_reusable_retry_function() -> Result<(), Box<dyn std::error::Error>
     let session_id = "test-session-456";
 
     // Define a helper retry function
+    #[allow(clippy::too_many_arguments)]
     async fn with_retry<F, Fut, T, E>(
         client: Arc<GenericOtelClient>,
         operation_name: String,
@@ -241,11 +258,11 @@ async fn test_reusable_retry_function() -> Result<(), Box<dyn std::error::Error>
         user_id: Option<String>,
         session_id: Option<String>,
         operation_fn: F,
-    ) -> Result<T, Box<dyn std::error::Error + Send + Sync>>
+    ) -> Result<T, E>
     where
         F: Fn(u32) -> Fut + Clone + Send + 'static,
         Fut: std::future::Future<Output = Result<T, E>> + Send + 'static,
-        T: Send + Clone + 'static,
+        T: Send + Clone + serde::Serialize + 'static,
         E: std::error::Error + Send + Sync + 'static,
     {
         // Create parent span for entire retry operation
@@ -279,11 +296,11 @@ async fn test_reusable_retry_function() -> Result<(), Box<dyn std::error::Error>
         }
 
         // Start parent span and execute retry logic
-        return client
+        client
             .clone()
-            .with_span(parent_attributes, async move {
+            .with_span_result(parent_attributes, None, async move {
                 let mut attempt = 0;
-                let mut last_error: Option<Box<dyn std::error::Error + Send + Sync>> = None;
+                let mut last_error: Option<E> = None;
 
                 while attempt < max_retries {
                     let mut attempt_attributes =
@@ -309,7 +326,7 @@ async fn test_reusable_retry_function() -> Result<(), Box<dyn std::error::Error>
 
                     // Execute attempt as child span
                     let result = client
-                        .with_span_result(attempt_attributes, async move {
+                        .with_span_result(attempt_attributes, None, async move {
                             op_fn(current_attempt).await
                         })
                         .await;
@@ -342,13 +359,14 @@ async fn test_reusable_retry_function() -> Result<(), Box<dyn std::error::Error>
                                         .build();
                             }
 
-                            client
-                                .with_span(success_attributes, async move {
+                            let _success_result = client
+                                .with_span_result(success_attributes, None, async move {
                                     tracing::info!(
                                         operation = %operation_name,
                                         final_attempt = attempt + 1,
                                         "Operation succeeded after retries"
                                     );
+                                    Ok::<(), std::io::Error>(())
                                 })
                                 .await;
 
@@ -356,7 +374,7 @@ async fn test_reusable_retry_function() -> Result<(), Box<dyn std::error::Error>
                         }
                         Err(err) => {
                             // Store error for potential final error message
-                            last_error = Some(Box::new(err));
+                            last_error = Some(err);
 
                             // Increment attempt counter
                             attempt += 1;
@@ -392,14 +410,15 @@ async fn test_reusable_retry_function() -> Result<(), Box<dyn std::error::Error>
                                 }
 
                                 let opname = operation_name.clone();
-                                client
-                                    .with_span(retry_attributes, async move {
+                                let _retry_result = client
+                                    .with_span_result(retry_attributes, None, async move {
                                         tracing::warn!(
                                             operation = %opname,
                                             attempt = attempt,
                                             max_retries = max_retries,
                                             "Operation failed, retrying"
                                         );
+                                        Ok::<(), std::io::Error>(())
                                     })
                                     .await;
 
@@ -437,24 +456,22 @@ async fn test_reusable_retry_function() -> Result<(), Box<dyn std::error::Error>
                         .build();
                 }
 
-                client
+                let _failure_result = client
                     .clone()
-                    .with_span(failure_attributes, async move {
+                    .with_span_result(failure_attributes, None, async move {
                         tracing::error!(
                             operation = %operation_name,
                             max_retries = max_retries,
                             "Operation failed after all retry attempts"
                         );
+                        Ok::<(), std::io::Error>(())
                     })
                     .await;
 
                 // Return last error
-                Err(match last_error {
-                    Some(err) => err,
-                    None => "Unknown error during retry operation".into(),
-                })
+                Err(last_error.unwrap())
             })
-            .await;
+            .await
     }
 
     // Now use our reusable retry function
@@ -472,10 +489,10 @@ async fn test_reusable_retry_function() -> Result<(), Box<dyn std::error::Error>
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
             if attempt < 2 {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("API rate limit exceeded on attempt {}", attempt + 1),
-                ))
+                Err(std::io::Error::other(format!(
+                    "API rate limit exceeded on attempt {}",
+                    attempt + 1
+                )))
             } else {
                 Ok(json!({"result": "Success on attempt 3"}).to_string())
             }
@@ -508,11 +525,11 @@ async fn test_structured_retry_workflow() -> Result<(), Box<dyn std::error::Erro
         user_id: Option<&str>,
         session_id: Option<&str>,
         operation_fn: F,
-    ) -> Result<T, Box<dyn std::error::Error + Send + Sync>>
+    ) -> Result<T, E>
     where
         F: Fn(u32, String) -> Fut + Clone + Send + 'static,
         Fut: std::future::Future<Output = Result<T, E>> + Send + 'static,
-        T: Send + Clone + 'static,
+        T: Send + Clone + serde::Serialize + 'static,
         E: std::error::Error + Send + Sync + 'static,
     {
         use uuid::Uuid;
@@ -522,7 +539,7 @@ async fn test_structured_retry_workflow() -> Result<(), Box<dyn std::error::Erro
         let workflow_name = workflow_name.into();
 
         // Create parent span for the entire workflow
-        let mut parent_attributes = OtelSpanBuilder::new(format!("{}", workflow_name))
+        let mut parent_attributes = OtelSpanBuilder::new(workflow_name.to_string())
             .span_type(OtelSpanType::Span)
             .tags(vec!["workflow".to_string(), "retry".to_string()])
             .input(json!({
@@ -549,9 +566,9 @@ async fn test_structured_retry_workflow() -> Result<(), Box<dyn std::error::Erro
         let session_id_clone = session_id.map(|s| s.to_string());
         client
             .clone()
-            .with_span(parent_attributes, async move {
+            .with_span_result(parent_attributes, None, async move {
                 let mut retry_count = 0;
-                let mut last_error: Option<Box<dyn std::error::Error + Send + Sync>> = None;
+                let mut last_error: Option<E> = None;
 
                 while retry_count < max_retries {
                     // Create attempt span with parent relationship
@@ -586,7 +603,7 @@ async fn test_structured_retry_workflow() -> Result<(), Box<dyn std::error::Erro
                     let current_attempt = retry_count;
                     let wid = workflow_id.clone();
                     let attempt_result = client_clone_l
-                        .with_span_result(attempt_attributes, async move {
+                        .with_span_result(attempt_attributes, None, async move {
                             op_fn(current_attempt, wid).await
                         })
                         .await;
@@ -618,20 +635,22 @@ async fn test_structured_retry_workflow() -> Result<(), Box<dyn std::error::Erro
                             }
 
                             client_clone_l
-                                .with_span(success_event, async move {
+                                .with_span_result(success_event, None, async move {
                                     tracing::info!(
                                         workflow = %workflow_name,
                                         attempt = retry_count + 1,
                                         "Workflow completed successfully"
                                     );
+                                    Ok::<(), std::io::Error>(())
                                 })
-                                .await;
+                                .await
+                                .unwrap();
 
                             return Ok(result);
                         }
                         Err(error) => {
                             // Store error for potential final error report
-                            last_error = Some(Box::new(error));
+                            last_error = Some(error);
 
                             retry_count += 1;
 
@@ -652,17 +671,19 @@ async fn test_structured_retry_workflow() -> Result<(), Box<dyn std::error::Erro
 
                                 let wname = workflow_name.clone();
                                 client_clone_l
-                                    .with_span(retry_event, async move {
+                                    .with_span_result(retry_event, None, async move {
                                         tracing::warn!(
                                             workflow = %wname,
                                             retry = retry_count,
                                             "Retrying failed operation"
                                         );
+                                        Ok::<(), std::io::Error>(())
                                     })
-                                    .await;
+                                    .await
+                                    .unwrap();
 
                                 // Add delay between retries with backoff
-                                let delay = 200 * (2_u64.pow(retry_count as u32 - 1));
+                                let delay = 200 * (2_u64.pow(retry_count - 1));
                                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
                             }
                         }
@@ -682,19 +703,21 @@ async fn test_structured_retry_workflow() -> Result<(), Box<dyn std::error::Erro
 
                 let wname = workflow_name.clone();
                 client_clone
-                    .with_span(failure_event, async move {
+                    .with_span_result(failure_event, None, async move {
                         tracing::error!(
                             workflow = %wname,
                             max_retries = max_retries,
                             "Workflow failed after exhausting all retry attempts"
                         );
+                        Ok::<(), std::io::Error>(())
                     })
-                    .await;
+                    .await
+                    .unwrap();
 
-                Err(match last_error {
-                    Some(err) => err,
-                    None => "Unknown error during workflow execution".into(),
-                })
+                match last_error {
+                    Some(err) => Err(err),
+                    None => panic!("Unknown error during workflow execution"),
+                }
             })
             .await
     }
@@ -707,7 +730,7 @@ async fn test_structured_retry_workflow() -> Result<(), Box<dyn std::error::Erro
         3,
         Some(user_id),
         Some(session_id),
-        move |attempt, workflow_id| {
+        move |attempt, _workflow_id| {
             let client_clone2 = client_clone.clone();
             async move {
                 // Simulate an operation that fails on first two attempts
@@ -721,17 +744,19 @@ async fn test_structured_retry_workflow() -> Result<(), Box<dyn std::error::Erro
                         .build();
 
                 client_clone2
-                    .with_span(child_attributes, async {
+                    .with_span_result(child_attributes, None, async {
                         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                         // Some sub-operation work here
+                        Ok::<(), std::io::Error>(())
                     })
-                    .await;
+                    .await
+                    .unwrap();
 
                 if attempt < 2 {
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("Service temporarily unavailable (attempt {})", attempt + 1),
-                    ))
+                    Err(std::io::Error::other(format!(
+                        "Service temporarily unavailable (attempt {})",
+                        attempt + 1
+                    )))
                 } else {
                     Ok("Chat completion successful".to_string())
                 }

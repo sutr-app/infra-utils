@@ -1,16 +1,23 @@
-use opentelemetry::global;
+use opentelemetry::propagation::Injector;
+use opentelemetry::trace::{SpanKind, SpanRef, TraceContextExt};
+use opentelemetry::{global, Context};
 use opentelemetry::{
     propagation::Extractor,
     trace::{Span, Tracer},
     KeyValue,
 };
+use opentelemetry_semantic_conventions::attribute;
 use std::fmt::Debug;
 use tonic::Request;
 
+pub mod attr;
+pub mod impls;
 pub mod otel_span;
 
 struct MetadataMap<'a>(&'a tonic::metadata::MetadataMap);
+struct MetadataMutMap<'a>(&'a mut tonic::metadata::MetadataMap);
 
+// for server-side metadata extraction
 impl Extractor for MetadataMap<'_> {
     /// Get a value for a key from the MetadataMap.  If the value can't be converted to &str, returns None
     fn get(&self, key: &str) -> Option<&str> {
@@ -26,6 +33,18 @@ impl Extractor for MetadataMap<'_> {
                 tonic::metadata::KeyRef::Binary(v) => v.as_str(),
             })
             .collect::<Vec<_>>()
+    }
+}
+
+// Trait for tracing requests in OpenTelemetry
+impl Injector for MetadataMutMap<'_> {
+    /// Set a key and value in the MetadataMap.  Does nothing if the key or value are not valid inputs
+    fn set(&mut self, key: &str, value: String) {
+        if let Ok(key) = tonic::metadata::MetadataKey::from_bytes(key.as_bytes()) {
+            if let Ok(val) = tonic::metadata::MetadataValue::try_from(&value) {
+                self.0.insert(key, val);
+            }
+        }
     }
 }
 
@@ -52,5 +71,136 @@ pub trait Tracing {
         }
 
         span
+    }
+    fn trace_response<T: Debug>(span: &mut global::BoxedSpan, response: &T) {
+        span.set_attribute(KeyValue::new("response", format!("{:?}", response)));
+        span.end();
+    }
+    fn trace_error(span: &mut global::BoxedSpan, error: &dyn std::error::Error) {
+        span.record_error(error);
+        span.set_status(opentelemetry::trace::Status::error(error.to_string()));
+        span.end();
+    }
+
+    fn trace_client<F, Fut, T, E>(
+        name: &'static str,
+        span_name: &'static str,
+        request: &mut Request<()>,
+        operation: F,
+    ) -> impl std::future::Future<Output = Result<T, E>> + Send
+    where
+        F: FnOnce(&mut Request<()>) -> Fut + Send,
+        Fut: std::future::Future<Output = Result<T, E>> + Send + 'static,
+        T: Debug + Send + 'static,
+        E: std::error::Error + Send + 'static,
+    {
+        async move {
+            let tracer = global::tracer(name);
+            let span = tracer
+                .span_builder(span_name)
+                .with_kind(SpanKind::Client)
+                .with_attributes([
+                    KeyValue::new("rpc.system", "grpc"),
+                    KeyValue::new("server.port", 50052),
+                    KeyValue::new("rpc.method", "say_hello"),
+                ])
+                .start(&tracer);
+            let cx = Context::current_with_span(span);
+
+            global::get_text_map_propagator(|propagator| {
+                propagator.inject_context(&cx, &mut MetadataMutMap(request.metadata_mut()))
+            });
+
+            let response = operation(request).await;
+
+            match response {
+                Ok(res) => {
+                    let span = cx.span();
+                    span.set_attribute(KeyValue::new("response", format!("{:?}", res)));
+                    span.end();
+                    Ok(res)
+                }
+                Err(e) => {
+                    let span = cx.span();
+                    span.record_error(&e);
+                    span.set_status(opentelemetry::trace::Status::error(e.to_string()));
+                    span.end();
+                    Err(e)
+                }
+            }
+        }
+    }
+
+    // Helper function for tracing gRPC client operations with custom request and context injection
+    fn trace_grpc_client_with_request<D, F, Fut, T, E>(
+        context: Option<Context>,
+        name: &'static str,
+        span_name: &'static str,
+        method_name: &'static str,
+        mut request_data: tonic::Request<D>,
+        operation: F,
+    ) -> impl std::future::Future<Output = Result<T, E>> + Send
+    where
+        D: Debug + Send + 'static,
+        F: FnOnce(tonic::Request<D>) -> Fut + Send,
+        Fut: std::future::Future<Output = Result<T, E>> + Send + 'static,
+        T: Debug + Send + 'static,
+        E: std::error::Error + Send + 'static,
+    {
+        async move {
+            let attributes = vec![
+                KeyValue::new("rpc.system", "grpc"),
+                KeyValue::new("service.name", name),
+                KeyValue::new("rpc.method", method_name),
+                KeyValue::new("input.value", format!("{:?}", &request_data)),
+            ];
+            let span =
+                Self::start_client_span_with_context(name, span_name, attributes, context.as_ref());
+            let cx = context.unwrap_or_else(|| Context::current_with_span(span));
+
+            // Create request and inject trace context
+            global::get_text_map_propagator(|propagator| {
+                propagator.inject_context(&cx, &mut MetadataMutMap(request_data.metadata_mut()))
+            });
+
+            let response = operation(request_data).await;
+
+            match response {
+                Ok(res) => {
+                    let span = cx.span();
+                    span.set_attribute(KeyValue::new("rpc.result", "success"));
+                    span.end();
+                    Ok(res)
+                }
+                Err(e) => {
+                    let span = cx.span();
+                    span.record_error(&e);
+                    span.set_status(opentelemetry::trace::Status::error(e.to_string()));
+                    span.end();
+                    Err(e)
+                }
+            }
+        }
+    }
+    fn start_client_span_with_context(
+        name: &'static str,
+        span_name: &'static str,
+        attributes: Vec<KeyValue>,
+        context: Option<&Context>,
+    ) -> opentelemetry::global::BoxedSpan {
+        let tracer = global::tracer(name);
+        if let Some(ctx) = context {
+            tracer
+                .span_builder(span_name)
+                .with_kind(SpanKind::Client)
+                .with_attributes(attributes)
+                .start_with_context(&tracer, ctx)
+        } else {
+            tracer
+                .span_builder(span_name)
+                .with_kind(SpanKind::Client)
+                .with_attributes(attributes)
+                .start(&tracer)
+        }
     }
 }

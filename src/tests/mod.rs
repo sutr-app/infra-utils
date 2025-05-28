@@ -1,16 +1,16 @@
 #[cfg(test)]
-mod hierarchical_span_tests;
-#[cfg(test)]
 mod otel_span_basic_tests;
 #[cfg(test)]
 mod otel_span_error_tests;
 #[cfg(test)]
 mod otel_span_retry_tests;
+#[cfg(test)]
+mod remote_span_tests;
 
 /// Integration test utilities for OpenTelemetry tests
 #[cfg(test)]
 pub mod test_utils {
-    use crate::infra::trace::otel_span::*;
+    use crate::infra::trace::impls::GenericOtelClient;
 
     /// Common setup for integration tests that require OTLP endpoints
     pub async fn setup_integration_test() -> Result<GenericOtelClient, Box<dyn std::error::Error>> {
