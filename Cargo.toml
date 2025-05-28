@@ -15,8 +15,7 @@ axum = { version = "0.8" }
 base64 = { version = "0.22" }
 bytes = { version = "1" }
 chrono = { version = "0.4", features = ["serde"] }
-command-utils = { path = "../command-utils" }
-# command-utils = { git = "https://github.com/sutr-app/command-utils.git", branch = "main" }
+command-utils = { git = "https://github.com/sutr-app/command-utils.git", branch = "main" }
 deadpool = { version = "0.12", features = ["rt_tokio_1"] }
 deadpool-redis = { version = "0.21", features = ["rt_tokio_1", "cluster"] }
 debug_stub_derive = "0.3"
