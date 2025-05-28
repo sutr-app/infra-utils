@@ -1,3 +1,4 @@
+use anyhow::Result;
 use opentelemetry::propagation::Injector;
 use opentelemetry::trace::{SpanKind, TraceContextExt};
 use opentelemetry::{global, Context};
@@ -81,70 +82,20 @@ pub trait Tracing {
         span.end();
     }
 
-    fn trace_client<F, Fut, T, E>(
-        name: &'static str,
-        span_name: &'static str,
-        request: &mut Request<()>,
-        operation: F,
-    ) -> impl std::future::Future<Output = Result<T, E>> + Send
-    where
-        F: FnOnce(&mut Request<()>) -> Fut + Send,
-        Fut: std::future::Future<Output = Result<T, E>> + Send + 'static,
-        T: Debug + Send + 'static,
-        E: std::error::Error + Send + 'static,
-    {
-        async move {
-            let tracer = global::tracer(name);
-            let span = tracer
-                .span_builder(span_name)
-                .with_kind(SpanKind::Client)
-                .with_attributes([
-                    KeyValue::new("rpc.system", "grpc"),
-                    KeyValue::new("server.port", 50052),
-                    KeyValue::new("rpc.method", "say_hello"),
-                ])
-                .start(&tracer);
-            let cx = Context::current_with_span(span);
-
-            global::get_text_map_propagator(|propagator| {
-                propagator.inject_context(&cx, &mut MetadataMutMap(request.metadata_mut()))
-            });
-
-            let response = operation(request).await;
-
-            match response {
-                Ok(res) => {
-                    let span = cx.span();
-                    span.set_attribute(KeyValue::new("response", format!("{:?}", res)));
-                    span.end();
-                    Ok(res)
-                }
-                Err(e) => {
-                    let span = cx.span();
-                    span.record_error(&e);
-                    span.set_status(opentelemetry::trace::Status::error(e.to_string()));
-                    span.end();
-                    Err(e)
-                }
-            }
-        }
-    }
-
     // Helper function for tracing gRPC client operations with custom request and context injection
-    fn trace_grpc_client_with_request<D, F, Fut, T, E>(
+    fn trace_grpc_client_with_request<D, F, Fut, T>(
         context: Option<Context>,
         name: &'static str,
         span_name: &'static str,
         method_name: &'static str,
         mut request_data: tonic::Request<D>,
         operation: F,
-    ) -> impl std::future::Future<Output = Result<T, E>> + Send
+    ) -> impl std::future::Future<Output = Result<T>> + Send
     where
         D: Debug + Send + 'static,
         F: FnOnce(tonic::Request<D>) -> Fut + Send,
-        Fut: std::future::Future<Output = Result<T, E>> + Send + 'static,
+        Fut: std::future::Future<Output = Result<T>> + Send + 'static,
         T: Debug + Send + 'static,
-        E: std::error::Error + Send + 'static,
     {
         async move {
             let attributes = vec![
@@ -173,7 +124,7 @@ pub trait Tracing {
                 }
                 Err(e) => {
                     let span = cx.span();
-                    span.record_error(&e);
+                    span.record_error(e.as_ref());
                     span.set_status(opentelemetry::trace::Status::error(e.to_string()));
                     span.end();
                     Err(e)
