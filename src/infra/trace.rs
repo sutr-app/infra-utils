@@ -190,4 +190,8 @@ pub trait Tracing {
                 .start(&tracer)
         }
     }
+    fn record_error(span: &tracing::Span, error: &str) {
+        span.set_status(opentelemetry::trace::Status::error(error.to_string()));
+        span.record("error", error);
+    }
 }
