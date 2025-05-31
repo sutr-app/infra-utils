@@ -7,8 +7,10 @@ use opentelemetry::{
     trace::{Span, Tracer},
     KeyValue,
 };
+use std::collections::HashMap;
 use std::fmt::Debug;
 use tonic::Request;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 pub mod attr;
 pub mod impls;
@@ -50,6 +52,41 @@ impl Injector for MetadataMutMap<'_> {
 
 //https://opentelemetry.io/docs/specs/semconv/general/trace/
 pub trait Tracing {
+    fn create_context(metadata: &HashMap<String, String>) -> Context {
+        global::get_text_map_propagator(|propagator| propagator.extract(metadata))
+    }
+    fn metadata_from_context(cx: &Context) -> HashMap<String, String> {
+        let mut metadata = HashMap::new();
+        global::get_text_map_propagator(|propagator| propagator.inject_context(cx, &mut metadata));
+        metadata
+    }
+    fn inject_metadata_from_context(metadata: &mut HashMap<String, String>, cx: &Context) {
+        global::get_text_map_propagator(|propagator| propagator.inject_context(cx, metadata));
+    }
+    fn tracing_span_from_metadata(
+        metadata: &HashMap<String, String>,
+        app_name: &'static str,
+        span_name: &'static str,
+    ) -> (tracing::Span, Context) {
+        let parent_cx = global::get_text_map_propagator(|prop| prop.extract(metadata));
+        let child_otel_span = global::tracer(app_name).start_with_context(span_name, &parent_cx);
+        let child_cx = parent_cx.with_span(child_otel_span);
+
+        let child_tracing_span = tracing::Span::current();
+        child_tracing_span.set_parent(child_cx.clone());
+        (child_tracing_span, child_cx)
+    }
+    fn child_tracing_span(
+        parent_cx: &opentelemetry::Context,
+        app_name: &'static str,
+        span_name: String,
+    ) -> (tracing::Span, Context) {
+        let child_otel_span = global::tracer(app_name).start_with_context(span_name, parent_cx);
+        let child_cx = parent_cx.with_span(child_otel_span);
+        let span = tracing::Span::current();
+        span.set_parent(child_cx.clone());
+        (span, child_cx)
+    }
     fn trace_request<T: Debug>(
         name: &'static str,
         span_name: &'static str,

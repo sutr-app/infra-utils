@@ -440,6 +440,22 @@ pub trait RemoteSpanClient: GenAIOtelClient + Send + Sync {
         (span, new_context_with_span_active)
     }
 
+    fn create_named_span(&self, span_name: impl Into<String>) -> opentelemetry::global::BoxedSpan {
+        use opentelemetry::trace::Tracer;
+        let tracer = self.get_tracer();
+        tracer.start(span_name.into())
+    }
+
+    fn create_child_span(
+        &self,
+        cx: &Context,
+        span_name: impl Into<String>,
+    ) -> opentelemetry::global::BoxedSpan {
+        use opentelemetry::trace::Tracer;
+        let tracer = self.get_tracer();
+        tracer.start_with_context(span_name.into(), cx)
+    }
+
     /// Create a child span from a parent context
     fn create_child_span_from_context(
         &self,
