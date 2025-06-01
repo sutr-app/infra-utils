@@ -1,6 +1,7 @@
 use anyhow::Result;
+use opentelemetry::global::BoxedSpan;
 use opentelemetry::propagation::Injector;
-use opentelemetry::trace::{SpanKind, TraceContextExt};
+use opentelemetry::trace::{SpanKind, SpanRef, TraceContextExt};
 use opentelemetry::{global, Context};
 use opentelemetry::{
     propagation::Extractor,
@@ -86,6 +87,15 @@ pub trait Tracing {
         let span = tracing::Span::current();
         span.set_parent(child_cx.clone());
         (span, child_cx)
+    }
+    fn start_child_otel_context<'a>(
+        parent_cx: &'a opentelemetry::Context,
+        app_name: &'static str,
+        span_name: String,
+    ) -> Context {
+        let child_otel_span = global::tracer(app_name).start_with_context(span_name, parent_cx);
+        let child_cx = parent_cx.with_span(child_otel_span);
+        child_cx
     }
     fn trace_request<T: Debug>(
         name: &'static str,
