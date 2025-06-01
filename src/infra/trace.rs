@@ -95,6 +95,16 @@ pub trait Tracing {
         let child_otel_span = global::tracer(app_name).start_with_context(span_name, parent_cx);
         parent_cx.with_span(child_otel_span)
     }
+    fn otel_context_from_metadata(
+        metadata: &HashMap<String, String>,
+        app_name: &'static str,
+        span_name: &'static str,
+    ) -> Context {
+        let parent_cx = global::get_text_map_propagator(|prop| prop.extract(metadata));
+        let child_otel_span = global::tracer(app_name).start_with_context(span_name, &parent_cx);
+        parent_cx.with_span(child_otel_span)
+    }
+
     fn trace_request<T: Debug>(
         name: &'static str,
         span_name: &'static str,
