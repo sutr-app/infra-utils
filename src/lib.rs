@@ -1,2 +1,3 @@
 pub mod infra;
-pub mod trace;
+#[cfg(test)]
+mod tests;

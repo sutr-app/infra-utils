@@ -13,6 +13,8 @@ use tower::Service;
 use tower_http::cors::Cors;
 use tower_http::cors::CorsLayer;
 
+pub mod reflection;
+
 #[derive(Debug, Clone)]
 pub struct GrpcConnection {
     endpoint: tonic::transport::Endpoint,
@@ -38,6 +40,10 @@ impl GrpcConnection {
                 "Failed to connect to gRPC server at {}",
                 &addr
             ))?));
+        Ok(Self { endpoint, channel })
+    }
+    pub async fn create(endpoint: Endpoint, channel: tonic::transport::Channel) -> Result<Self> {
+        let channel = Arc::new(RwLock::new(channel));
         Ok(Self { endpoint, channel })
     }
 
