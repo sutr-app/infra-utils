@@ -102,9 +102,7 @@ pub trait Tracing {
         span_name: &'static str,
     ) -> global::BoxedSpan {
         let parent_cx = global::get_text_map_propagator(|prop| prop.extract(metadata));
-        let child_otel_span = global::tracer(app_name).start_with_context(span_name, &parent_cx);
-        // parent_cx.with_span(child_otel_span)
-        child_otel_span
+        global::tracer(app_name).start_with_context(span_name, &parent_cx)
     }
 
     fn trace_request<T: Debug>(
