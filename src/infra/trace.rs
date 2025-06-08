@@ -1,6 +1,6 @@
 use anyhow::Result;
 use opentelemetry::propagation::Injector;
-use opentelemetry::trace::{SpanKind, TraceContextExt};
+use opentelemetry::trace::{SpanKind, SpanRef, TraceContextExt};
 use opentelemetry::{global, Context};
 use opentelemetry::{
     propagation::Extractor,
@@ -63,46 +63,46 @@ pub trait Tracing {
     fn inject_metadata_from_context(metadata: &mut HashMap<String, String>, cx: &Context) {
         global::get_text_map_propagator(|propagator| propagator.inject_context(cx, metadata));
     }
+    // XXX not working...
     fn tracing_span_from_metadata(
         metadata: &HashMap<String, String>,
         app_name: &'static str,
         span_name: &'static str,
-    ) -> (tracing::Span, Context) {
+    ) -> tracing::Span {
         let parent_cx = global::get_text_map_propagator(|prop| prop.extract(metadata));
-        let child_otel_span = global::tracer(app_name).start_with_context(span_name, &parent_cx);
-        let child_cx = parent_cx.with_span(child_otel_span);
-
-        let child_tracing_span = tracing::Span::current();
-        child_tracing_span.set_parent(child_cx.clone());
-        (child_tracing_span, child_cx)
+        let child_tracing_span = tracing::span!(
+            tracing::Level::INFO,
+            "_",
+            "app.name" = app_name,
+            "span.name" = span_name
+        );
+        child_tracing_span.set_parent(parent_cx.clone());
+        child_tracing_span
     }
+    // XXX not working...
     fn child_tracing_span(
         parent_cx: &opentelemetry::Context,
         app_name: &'static str,
         span_name: String,
-    ) -> (tracing::Span, Context) {
-        let child_otel_span = global::tracer(app_name).start_with_context(span_name, parent_cx);
-        let child_cx = parent_cx.with_span(child_otel_span);
-        let span = tracing::Span::current();
-        span.set_parent(child_cx.clone());
-        (span, child_cx)
+    ) -> tracing::Span {
+        let span = tracing::info_span!("_", "app.name" = app_name, "span.name" = span_name);
+        span.set_parent(parent_cx.clone());
+        span
     }
-    fn start_child_otel_context(
+    fn start_child_otel_span(
         parent_cx: &opentelemetry::Context,
         app_name: &'static str,
         span_name: String,
-    ) -> Context {
-        let child_otel_span = global::tracer(app_name).start_with_context(span_name, parent_cx);
-        parent_cx.with_span(child_otel_span)
+    ) -> global::BoxedSpan {
+        global::tracer(app_name).start_with_context(span_name, parent_cx)
     }
-    fn otel_context_from_metadata(
+    fn otel_span_from_metadata(
         metadata: &HashMap<String, String>,
         app_name: &'static str,
         span_name: &'static str,
-    ) -> Context {
+    ) -> global::BoxedSpan {
         let parent_cx = global::get_text_map_propagator(|prop| prop.extract(metadata));
-        let child_otel_span = global::tracer(app_name).start_with_context(span_name, &parent_cx);
-        parent_cx.with_span(child_otel_span)
+        global::tracer(app_name).start_with_context(span_name, &parent_cx)
     }
 
     fn trace_request<T: Debug>(
@@ -208,8 +208,8 @@ pub trait Tracing {
                 .start(&tracer)
         }
     }
-    fn record_error(span: &tracing::Span, error: &str) {
+    fn record_error(span: &SpanRef<'_>, error: &str) {
         span.set_status(opentelemetry::trace::Status::error(error.to_string()));
-        span.record("error", error);
+        span.set_attribute(KeyValue::new("error", error.to_string()));
     }
 }
