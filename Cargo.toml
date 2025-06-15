@@ -37,9 +37,9 @@ opentelemetry-semantic-conventions = { version = "0.30", features = [
     "semconv_experimental",
 ] }
 opentelemetry-appender-tracing = { version = "0.30" }
-prost = "0.13"
-prost-reflect = { version = "0.15", features = ["serde"] }
-prost-reflect-build = "0.15"
+prost = "0.14"
+prost-reflect = { version = "0.16", features = ["serde"] }
+prost-reflect-build = "0.16"
 rand = "0.9"
 readability = { version = "0.3" }
 redis = { version = "0.31", features = [
