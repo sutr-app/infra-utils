@@ -7,6 +7,7 @@ use opentelemetry::{
     trace::{Span, Tracer},
     KeyValue,
 };
+use opentelemetry_otlp::tonic_types;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use tonic::Request;
@@ -16,8 +17,8 @@ pub mod attr;
 pub mod impls;
 pub mod otel_span;
 
-struct MetadataMap<'a>(&'a tonic::metadata::MetadataMap);
-struct MetadataMutMap<'a>(&'a mut tonic::metadata::MetadataMap);
+struct MetadataMap<'a>(&'a tonic_types::metadata::MetadataMap);
+struct MetadataMutMap<'a>(&'a mut tonic_types::metadata::MetadataMap);
 
 // for server-side metadata extraction
 impl Extractor for MetadataMap<'_> {
@@ -116,7 +117,7 @@ pub trait Tracing {
 
         span.set_attribute(KeyValue::new("service.name", name));
         span.set_attribute(KeyValue::new("service.method", span_name));
-        span.set_attribute(KeyValue::new("request", format!("{:?}", request)));
+        span.set_attribute(KeyValue::new("request", format!("{request:?}")));
 
         if let Some(req_path) = request.metadata().get("path") {
             if let Ok(path_str) = req_path.to_str() {
@@ -128,7 +129,7 @@ pub trait Tracing {
         span
     }
     fn trace_response<T: Debug>(span: &mut global::BoxedSpan, response: &T) {
-        span.set_attribute(KeyValue::new("response", format!("{:?}", response)));
+        span.set_attribute(KeyValue::new("response", format!("{response:?}")));
         span.end();
     }
     fn trace_error(span: &mut global::BoxedSpan, error: &dyn std::error::Error) {

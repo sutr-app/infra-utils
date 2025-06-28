@@ -398,7 +398,7 @@ impl GrpcReflectionClient {
                 file_request,
             ])))
             .await
-            .context(format!("Failed to fetch file descriptor for {}", file_name))?
+            .context(format!("Failed to fetch file descriptor for {file_name}"))?
             .into_inner();
 
         if let Some(response_result) = stream.next().await {
@@ -596,7 +596,7 @@ mod tests {
 
         // List all services
         let services = client.list_services().await?;
-        println!("Available services: {:?}", services);
+        println!("Available services: {services:?}");
 
         // Verify expected services exist
         assert!(
@@ -624,7 +624,7 @@ mod tests {
 
         // Get methods for FunctionService
         let methods = client.get_service_methods(service_name).await?;
-        println!("FunctionService methods: {:?}", methods);
+        println!("FunctionService methods: {methods:?}");
 
         // Verify expected methods exist
         assert!(
@@ -639,7 +639,7 @@ mod tests {
         // Get service descriptors
         let pool = client.get_service_with_dependencies(service_name).await?;
         let messages = client.get_all_message_names_from_pool(&pool);
-        println!("Messages from FunctionService: {:?}", messages);
+        println!("Messages from FunctionService: {messages:?}");
 
         // Test getting message descriptor for FindFunctionRequest
         let req_message = "jobworkerp.function.service.FindFunctionRequest";
@@ -647,19 +647,19 @@ mod tests {
 
         // Get field names for the request message
         let fields = client.get_message_field_names(req_message).await?;
-        println!("FindFunctionRequest fields: {:?}", fields);
+        println!("FindFunctionRequest fields: {fields:?}");
         assert!(fields.contains(&"exclude_runner".to_string()));
         assert!(fields.contains(&"exclude_worker".to_string()));
 
         // Get message template
         let template = client.get_message_template(req_message).await?;
-        println!("Template for FindFunctionRequest: {}", template);
+        println!("Template for FindFunctionRequest: {template}");
 
         // Parse and serialize a simple request
         let json = r#"{"excludeRunner": false, "excludeWorker": false}"#;
         let bytes = client.parse_json_to_message(req_message, json).await?;
         let json_back = client.parse_bytes_to_json(req_message, &bytes).await?;
-        println!("JSON roundtrip: {}", json_back);
+        println!("JSON roundtrip: {json_back}");
 
         Ok(())
     }
@@ -677,7 +677,7 @@ mod tests {
 
         // Get methods for FunctionSetService
         let methods = client.get_service_methods(service_name).await?;
-        println!("FunctionSetService methods: {:?}", methods);
+        println!("FunctionSetService methods: {methods:?}");
 
         // Verify expected methods exist
         assert!(
@@ -700,15 +700,12 @@ mod tests {
         // Get message descriptor for FunctionSetData
         let data_message = "jobworkerp.function.data.FunctionSetData";
         let template = client.get_message_template(data_message).await?;
-        println!("Template for FunctionSetData: {}", template);
+        println!("Template for FunctionSetData: {template}");
 
         // Test the recursive descriptor fetching
         let pool = client.get_service_with_dependencies(service_name).await?;
         let all_messages = client.get_all_message_names_from_pool(&pool);
-        println!(
-            "All messages from FunctionSetService with deps: {:?}",
-            all_messages
-        );
+        println!("All messages from FunctionSetService with deps: {all_messages:?}");
 
         // Check if dependencies are correctly fetched
         assert!(
@@ -751,7 +748,7 @@ mod tests {
 
         // Convert back to JSON to verify roundtrip
         let json_back = client.parse_bytes_to_json(message_name, &bytes).await?;
-        println!("Roundtrip JSON: {}", json_back);
+        println!("Roundtrip JSON: {json_back}");
 
         // Get the message descriptor and create a dynamic message
         let descriptor = client.get_message_descriptor(message_name).await?;
@@ -759,7 +756,7 @@ mod tests {
 
         // Format the dynamic message for debugging
         let formatted = client.format_dynamic_message(&dynamic_message);
-        println!("Formatted message: {}", formatted);
+        println!("Formatted message: {formatted}");
 
         // Verify fields
         let name_field = dynamic_message.get_field_by_name("name").unwrap();
@@ -789,7 +786,7 @@ mod tests {
 
         // Get template to understand structure
         let template = client.get_message_template(message_name).await?;
-        println!("Template for FunctionSpecs: {}", template);
+        println!("Template for FunctionSpecs: {template}");
 
         // Create a FunctionSpecs message via JSON
         let json = r#"{
@@ -806,11 +803,11 @@ mod tests {
         // Convert to binary and back
         let bytes = client.parse_json_to_message(message_name, json).await?;
         let parsed_json = client.parse_bytes_to_json(message_name, &bytes).await?;
-        println!("FunctionSpecs roundtrip: {}", parsed_json);
+        println!("FunctionSpecs roundtrip: {parsed_json}");
 
         // Get field structure
         let field_names = client.get_message_field_names(message_name).await?;
-        println!("Fields in FunctionSpecs: {:?}", field_names);
+        println!("Fields in FunctionSpecs: {field_names:?}");
 
         // Check that expected fields exist
         assert!(field_names.contains(&"name".to_string()));
@@ -856,8 +853,7 @@ mod tests {
             let initial_symbols_count = cache.processed_symbols.len();
             let initial_files_count = cache.processed_files.len();
             println!(
-                "Initial cache state: {} symbols, {} files",
-                initial_symbols_count, initial_files_count
+                "Initial cache state: {initial_symbols_count} symbols, {initial_files_count} files"
             );
         }
 
@@ -865,7 +861,7 @@ mod tests {
         let start = std::time::Instant::now();
         let pool1 = client.get_service_with_dependencies(service_name).await?;
         let first_duration = start.elapsed();
-        println!("First request duration: {:?}", first_duration);
+        println!("First request duration: {first_duration:?}");
 
         // Get count of messages to verify the pool is populated correctly
         let messages1 = client.get_all_message_names_from_pool(&pool1);
@@ -898,7 +894,7 @@ mod tests {
         let start = std::time::Instant::now();
         let pool2 = client.get_service_with_dependencies(service_name).await?;
         let second_duration = start.elapsed();
-        println!("Second request duration: {:?}", second_duration);
+        println!("Second request duration: {second_duration:?}");
 
         // Get messages from second request
         let messages2 = client.get_all_message_names_from_pool(&pool2);
@@ -916,7 +912,7 @@ mod tests {
         let start = std::time::Instant::now();
         let message_descriptor = client.get_message_descriptor(message_name).await?;
         let message_request_duration = start.elapsed();
-        println!("Message request duration: {:?}", message_request_duration);
+        println!("Message request duration: {message_request_duration:?}");
 
         // Verify the message descriptor was retrieved correctly
         assert_eq!(message_descriptor.full_name(), message_name);
@@ -925,10 +921,7 @@ mod tests {
         // This is a heuristic test, as timing can vary based on system load
         // We're looking for the second request to be at least 30% faster than the first
         // However, on CI systems with high variability, this might not always hold true
-        println!(
-            "First request: {:?}, Second request: {:?}",
-            first_duration, second_duration
-        );
+        println!("First request: {first_duration:?}, Second request: {second_duration:?}");
         println!(
             "Speed improvement: {:.2}x",
             first_duration.as_secs_f64() / second_duration.as_secs_f64()
@@ -951,10 +944,7 @@ mod tests {
         let start = std::time::Instant::now();
         let _descriptor2 = client.get_message_descriptor(message_name).await?;
         let cached_request_duration = start.elapsed();
-        println!(
-            "Fully cached message request duration: {:?}",
-            cached_request_duration
-        );
+        println!("Fully cached message request duration: {cached_request_duration:?}");
 
         Ok(())
     }
@@ -1006,14 +996,13 @@ mod tests {
 
         // Verify we got the correct descriptor
         assert_eq!(message_descriptor.full_name(), message_name);
-        println!("Getting cached message took: {:?}", duration);
+        println!("Getting cached message took: {duration:?}");
 
         // Since this should be a cache hit, it should be very fast (sub-millisecond typically)
         // but we'll use a more conservative threshold for CI environments
         assert!(
             duration.as_millis() < 100,
-            "Cache retrieval should be fast, took {:?}",
-            duration
+            "Cache retrieval should be fast, took {duration:?}"
         );
 
         // Now try getting another service - this should populate additional cache entries
@@ -1058,7 +1047,7 @@ mod tests {
             .await?;
         let duration = start.elapsed();
 
-        println!("Re-requesting both services took: {:?}", duration);
+        println!("Re-requesting both services took: {duration:?}");
         // This should be faster than getting just one service the first time
         // but we avoid strict timing assertions for CI reliability
 
@@ -1095,7 +1084,7 @@ mod tests {
             !message_samples.is_empty(),
             "Should find some messages to test"
         );
-        println!("Testing with messages: {:?}", message_samples);
+        println!("Testing with messages: {message_samples:?}");
 
         // First batch: get each message descriptor - first request should be slower
         let mut first_request_durations = Vec::new();
@@ -1103,7 +1092,7 @@ mod tests {
             let start = std::time::Instant::now();
             let descriptor = client.get_message_descriptor(message_name).await?;
             let duration = start.elapsed();
-            println!("First request for {}: {:?}", message_name, duration);
+            println!("First request for {message_name}: {duration:?}");
             first_request_durations.push(duration);
 
             // Verify we got the right descriptor
@@ -1116,7 +1105,7 @@ mod tests {
             let start = std::time::Instant::now();
             let descriptor = client.get_message_descriptor(message_name).await?;
             let duration = start.elapsed();
-            println!("Second request for {}: {:?}", message_name, duration);
+            println!("Second request for {message_name}: {duration:?}");
             second_request_durations.push(duration);
 
             // Verify we got the right descriptor
@@ -1135,8 +1124,8 @@ mod tests {
             .sum::<f64>()
             / second_request_durations.len() as f64;
 
-        println!("Average first request: {:.6}s", avg_first);
-        println!("Average second request: {:.6}s", avg_second);
+        println!("Average first request: {avg_first:.6}s");
+        println!("Average second request: {avg_second:.6}s");
         println!(
             "Average improvement: {:.2}x",
             if avg_second > 0.0 {
@@ -1164,10 +1153,7 @@ mod tests {
             let start = std::time::Instant::now();
             let template = client.get_message_template(message_name).await?;
             let duration = start.elapsed();
-            println!(
-                "Template generation for {} took: {:?}",
-                message_name, duration
-            );
+            println!("Template generation for {message_name} took: {duration:?}");
             assert!(!template.is_empty(), "Template should not be empty");
         }
 

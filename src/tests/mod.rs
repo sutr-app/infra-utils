@@ -20,7 +20,7 @@ pub mod test_utils {
         // Force override any existing configuration
         std::env::set_var("OTLP_ADDR", &otlp_addr);
 
-        println!("Running integration test with OTLP endpoint: {}", otlp_addr);
+        println!("Running integration test with OTLP endpoint: {otlp_addr}");
 
         // Initialize tracing with OTLP exporter using command_utils
         let logging_config = command_utils::util::tracing::LoggingConfig {
@@ -40,10 +40,7 @@ pub mod test_utils {
             .await
             .unwrap();
 
-        println!(
-            "OpenTelemetry tracer initialized for OTLP endpoint: {}",
-            otlp_addr
-        );
+        println!("OpenTelemetry tracer initialized for OTLP endpoint: {otlp_addr}");
 
         // Create and return client
         Ok(GenericOtelClient::new("otel-span-integration-test"))
