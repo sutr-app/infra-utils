@@ -85,7 +85,7 @@ pub mod test {
     pub async fn truncate_tables(pool: &RdbPool, tables: Vec<&str>) {
         let sql = tables
             .iter()
-            .map(|t| format!("TRUNCATE TABLE {};", t))
+            .map(|t| format!("TRUNCATE TABLE {t};"))
             .collect::<Vec<String>>()
             .join(" ");
         sqlx::raw_sql(sql.as_str())
@@ -189,12 +189,7 @@ pub mod test {
     pub async fn truncate_tables(pool: &RdbPool, tables: Vec<&str>) {
         let sql = tables
             .iter()
-            .map(|t| {
-                format!(
-                    "DELETE FROM '{}'; DELETE FROM SQLITE_SEQUENCE WHERE name = '{}'; ",
-                    t, t
-                )
-            })
+            .map(|t| format!("DELETE FROM '{t}'; DELETE FROM SQLITE_SEQUENCE WHERE name = '{t}'; "))
             .collect::<Vec<String>>()
             .join(" ");
         sqlx::raw_sql(sql.as_str())

@@ -117,7 +117,7 @@ pub trait Tracing {
 
         span.set_attribute(KeyValue::new("service.name", name));
         span.set_attribute(KeyValue::new("service.method", span_name));
-        span.set_attribute(KeyValue::new("request", format!("{:?}", request)));
+        span.set_attribute(KeyValue::new("request", format!("{request:?}")));
 
         if let Some(req_path) = request.metadata().get("path") {
             if let Ok(path_str) = req_path.to_str() {
@@ -129,7 +129,7 @@ pub trait Tracing {
         span
     }
     fn trace_response<T: Debug>(span: &mut global::BoxedSpan, response: &T) {
-        span.set_attribute(KeyValue::new("response", format!("{:?}", response)));
+        span.set_attribute(KeyValue::new("response", format!("{response:?}")));
         span.end();
     }
     fn trace_error(span: &mut global::BoxedSpan, error: &dyn std::error::Error) {

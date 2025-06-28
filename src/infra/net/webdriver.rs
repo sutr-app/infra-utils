@@ -224,8 +224,7 @@ impl Manager for WebDriverManagerImpl {
                 tracing::info!("webdriver recycle error (quit instance): {:?}", e);
                 let quit = wrap.quit().await;
                 Err(RecycleError::Message(Cow::Owned(format!(
-                    "error in getting session: {:?}, quit: {:?}",
-                    e, quit
+                    "error in getting session: {e:?}, quit: {quit:?}"
                 ))))
             }
         }
@@ -336,8 +335,7 @@ pub trait WebScraper: UseWebDriver + Send + Sync {
             .inspect_err(|e| tracing::warn!("error in scraping contents: {:?}", &e))?;
         if contents.is_empty() {
             Err(WebDriverError::ParseError(format!(
-                "content not found: {}",
-                u
+                "content not found: {u}"
             )))? // bail out
         }
 
@@ -347,7 +345,7 @@ pub trait WebScraper: UseWebDriver + Send + Sync {
                 .await
                 .map_err(|e| {
                     tracing::warn!("error in parse_datetime: {:?}", &e);
-                    WebDriverError::ParseError(format!("parse_datetime error: {:?}", e))
+                    WebDriverError::ParseError(format!("parse_datetime error: {e:?}"))
                 })
                 .unwrap_or(None)
         } else {
@@ -600,7 +598,7 @@ impl HttpClient for ReqwestClient {
         let resp = req
             .send()
             .await
-            .map_err(|e| WebDriverError::HttpError(format!("request error: {:?}", e)))?;
+            .map_err(|e| WebDriverError::HttpError(format!("request error: {e:?}")))?;
         let status = resp.status();
         let mut builder = Response::builder();
 

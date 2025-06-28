@@ -372,7 +372,7 @@ mod test {
                 .blpop::<&str, (String, i64)>("foobl", 1.0)
                 .await
             {
-                println!("============ Blocking pop result on {}: {}", k, v);
+                println!("============ Blocking pop result on {k}: {v}");
             }
         });
 

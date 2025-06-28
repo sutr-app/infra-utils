@@ -116,27 +116,26 @@ impl GenAIOtelClient for GenericOtelClient {
                 match value {
                     serde_json::Value::Number(n) if n.is_f64() => {
                         key_values.push(KeyValue::new(
-                            format!("gen_ai.request.{}", key),
+                            format!("gen_ai.request.{key}"),
                             n.as_f64().unwrap(),
                         ));
                     }
                     serde_json::Value::Number(n) if n.is_i64() => {
                         key_values.push(KeyValue::new(
-                            format!("gen_ai.request.{}", key),
+                            format!("gen_ai.request.{key}"),
                             n.as_i64().unwrap(),
                         ));
                     }
                     serde_json::Value::Bool(b) => {
-                        key_values.push(KeyValue::new(format!("gen_ai.request.{}", key), *b));
+                        key_values.push(KeyValue::new(format!("gen_ai.request.{key}"), *b));
                     }
                     serde_json::Value::String(s) => {
-                        key_values
-                            .push(KeyValue::new(format!("gen_ai.request.{}", key), s.clone()));
+                        key_values.push(KeyValue::new(format!("gen_ai.request.{key}"), s.clone()));
                     }
                     _ => {
                         if let Ok(value_str) = serde_json::to_string(value) {
                             key_values
-                                .push(KeyValue::new(format!("gen_ai.request.{}", key), value_str));
+                                .push(KeyValue::new(format!("gen_ai.request.{key}"), value_str));
                         }
                     }
                 }
@@ -183,7 +182,7 @@ impl GenAIOtelClient for GenericOtelClient {
             for (key, value) in metadata {
                 if let Ok(value_str) = serde_json::to_string(&value) {
                     key_values.push(KeyValue::new(
-                        format!("langfuse.observation.metadata.{}", key),
+                        format!("langfuse.observation.metadata.{key}"),
                         value_str,
                     ));
                 }
@@ -226,7 +225,7 @@ impl GenAIOtelClient for GenericOtelClient {
                     }
                     _ => {
                         // Custom usage metrics
-                        key_values.push(KeyValue::new(format!("gen_ai.usage.{}", key), *value));
+                        key_values.push(KeyValue::new(format!("gen_ai.usage.{key}"), *value));
                     }
                 }
             }
@@ -293,7 +292,7 @@ impl GenAIOtelClient for GenericOtelClient {
             for (key, value) in trace_metadata {
                 if let Ok(value_str) = serde_json::to_string(&value) {
                     key_values.push(KeyValue::new(
-                        format!("langfuse.trace.metadata.{}", key),
+                        format!("langfuse.trace.metadata.{key}"),
                         value_str,
                     ));
                 }
@@ -316,7 +315,7 @@ impl GenAIOtelClient for GenericOtelClient {
         if !attributes.finish_reasons.is_empty() {
             for (i, reason) in attributes.finish_reasons.iter().enumerate() {
                 key_values.push(KeyValue::new(
-                    format!("gen_ai.completion.{}.finish_reason", i),
+                    format!("gen_ai.completion.{i}.finish_reason"),
                     reason.clone(),
                 ));
             }

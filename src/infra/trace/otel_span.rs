@@ -10,7 +10,7 @@ use std::collections::HashMap;
 /// Carrier extractor for extracting context from HTTP headers or similar key-value maps
 struct CarrierExtractor<'a>(&'a HashMap<String, String>);
 
-impl<'a> opentelemetry::propagation::Extractor for CarrierExtractor<'a> {
+impl opentelemetry::propagation::Extractor for CarrierExtractor<'_> {
     fn get(&self, key: &str) -> Option<&str> {
         self.0.get(key).map(|s| s.as_str())
     }
@@ -23,7 +23,7 @@ impl<'a> opentelemetry::propagation::Extractor for CarrierExtractor<'a> {
 /// Carrier injector for injecting context into HTTP headers or similar key-value maps
 struct CarrierInjector<'a>(&'a mut HashMap<String, String>);
 
-impl<'a> opentelemetry::propagation::Injector for CarrierInjector<'a> {
+impl opentelemetry::propagation::Injector for CarrierInjector<'_> {
     fn set(&mut self, key: &str, value: String) {
         self.0.insert(key.to_string(), value);
     }
@@ -277,8 +277,8 @@ pub trait GenAIOtelClient: Send + Sync {
         span_name: Option<&str>,
     ) -> OtelSpanAttributes {
         let span_name = span_name.map_or_else(
-            || format!("error: {}", error),
-            |ctx| format!("error in {}: {}", ctx, error),
+            || format!("error: {error}"),
+            |ctx| format!("error in {ctx}: {error}"),
         );
 
         let mut metadata = HashMap::new();

@@ -79,7 +79,7 @@ async fn test_retry_workflow_with_parent_child_spans() -> Result<(), Box<dyn std
 
                 // Create a child span for this specific attempt
                 let attempt_attributes =
-                    OtelSpanBuilder::new(format!("generation-attempt-{}", attempt_num))
+                    OtelSpanBuilder::new(format!("generation-attempt-{attempt_num}"))
                         .span_type(OtelSpanType::Generation)
                         .model("gpt-4")
                         .user_id(user_id)
@@ -163,7 +163,7 @@ async fn test_retry_workflow_with_parent_child_spans() -> Result<(), Box<dyn std
                         if current_retry < max_retries {
                             // Log retry event as a child span
                             let retry_attributes =
-                                OtelSpanBuilder::new(format!("retry-{}", current_retry))
+                                OtelSpanBuilder::new(format!("retry-{current_retry}"))
                                     .span_type(OtelSpanType::Event)
                                     .level("WARNING")
                                     .user_id(user_id)
@@ -266,7 +266,7 @@ async fn test_reusable_retry_function() -> Result<(), Box<dyn std::error::Error>
         E: std::error::Error + Send + Sync + 'static,
     {
         // Create parent span for entire retry operation
-        let mut parent_attributes = OtelSpanBuilder::new(format!("{}-with-retry", operation_name))
+        let mut parent_attributes = OtelSpanBuilder::new(format!("{operation_name}-with-retry"))
             .span_type(OtelSpanType::Span)
             .tags(vec!["retry".to_string()])
             .input(json!({
@@ -335,7 +335,7 @@ async fn test_reusable_retry_function() -> Result<(), Box<dyn std::error::Error>
                         Ok(value) => {
                             // Success! Record the successful attempt
                             let mut success_attributes =
-                                OtelSpanBuilder::new(format!("{}-success", operation_name))
+                                OtelSpanBuilder::new(format!("{operation_name}-success"))
                                     .span_type(OtelSpanType::Event)
                                     .level("INFO")
                                     .input(json!({
@@ -382,8 +382,7 @@ async fn test_reusable_retry_function() -> Result<(), Box<dyn std::error::Error>
                             if attempt < max_retries {
                                 // Record retry event
                                 let mut retry_attributes = OtelSpanBuilder::new(format!(
-                                    "{}-retry-{}",
-                                    operation_name, attempt
+                                    "{operation_name}-retry-{attempt}"
                                 ))
                                 .span_type(OtelSpanType::Event)
                                 .level("WARNING")
@@ -434,7 +433,7 @@ async fn test_reusable_retry_function() -> Result<(), Box<dyn std::error::Error>
 
                 // If we get here, all retries failed
                 let mut failure_attributes =
-                    OtelSpanBuilder::new(format!("{}-failed", operation_name))
+                    OtelSpanBuilder::new(format!("{operation_name}-failed"))
                         .span_type(OtelSpanType::Event)
                         .level("ERROR")
                         .input(json!({
@@ -612,7 +611,7 @@ async fn test_structured_retry_workflow() -> Result<(), Box<dyn std::error::Erro
                         Ok(result) => {
                             // Success - log event and return result
                             let mut success_event =
-                                OtelSpanBuilder::new(format!("{}-success", workflow_name))
+                                OtelSpanBuilder::new(format!("{workflow_name}-success"))
                                     .span_type(OtelSpanType::Event)
                                     .level("INFO")
                                     .input(json!({
@@ -657,8 +656,7 @@ async fn test_structured_retry_workflow() -> Result<(), Box<dyn std::error::Erro
                             if retry_count < max_retries {
                                 // Create retry event span
                                 let retry_event = OtelSpanBuilder::new(format!(
-                                    "{}-retry-{}",
-                                    workflow_name, retry_count
+                                    "{workflow_name}-retry-{retry_count}"
                                 ))
                                 .span_type(OtelSpanType::Event)
                                 .level("WARNING")
@@ -691,7 +689,7 @@ async fn test_structured_retry_workflow() -> Result<(), Box<dyn std::error::Erro
                 }
 
                 // If we get here, all retries failed
-                let failure_event = OtelSpanBuilder::new(format!("{}-failed", workflow_name))
+                let failure_event = OtelSpanBuilder::new(format!("{workflow_name}-failed"))
                     .span_type(OtelSpanType::Event)
                     .level("ERROR")
                     .input(json!({

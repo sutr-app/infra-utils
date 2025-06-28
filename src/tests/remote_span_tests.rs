@@ -16,14 +16,14 @@ async fn test_remote_child_span_result_with_response_parser(
 
     // Test unique ID for this test run
     let test_id = format!("remote-success-{}", chrono::Utc::now().timestamp());
-    let test_user_id = format!("user-{}", test_id);
-    let test_session_id = format!("session-{}", test_id);
+    let test_user_id = format!("user-{test_id}");
+    let test_session_id = format!("session-{test_id}");
 
     // Simulate distributed tracing by creating a carrier with trace context
     let mut carrier = HashMap::new();
 
     // Create parent span first to establish trace context
-    let parent_attributes = OtelSpanBuilder::new(format!("parent-service-{}", test_id))
+    let parent_attributes = OtelSpanBuilder::new(format!("parent-service-{test_id}"))
         .span_type(OtelSpanType::Span)
         .user_id(test_user_id.clone())
         .session_id(test_session_id.clone())
@@ -44,7 +44,7 @@ async fn test_remote_child_span_result_with_response_parser(
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Now use the carrier to create remote child span
-    let remote_attributes = OtelSpanBuilder::new(format!("remote-service-operation-{}", test_id))
+    let remote_attributes = OtelSpanBuilder::new(format!("remote-service-operation-{test_id}"))
         .span_type(OtelSpanType::Generation)
         .model("remote-llm-model")
         .user_id(test_user_id.clone())
@@ -124,8 +124,8 @@ async fn test_remote_child_span_result_with_error() -> Result<(), Box<dyn std::e
 
     // Test unique ID for this test run
     let test_id = format!("remote-error-{}", chrono::Utc::now().timestamp());
-    let test_user_id = format!("user-{}", test_id);
-    let test_session_id = format!("session-{}", test_id);
+    let test_user_id = format!("user-{test_id}");
+    let test_session_id = format!("session-{test_id}");
 
     // Create custom error for testing
     #[derive(Debug)]
@@ -141,7 +141,7 @@ async fn test_remote_child_span_result_with_error() -> Result<(), Box<dyn std::e
     let mut carrier = HashMap::new();
 
     // Create parent span context
-    let parent_attributes = OtelSpanBuilder::new(format!("parent-error-service-{}", test_id))
+    let parent_attributes = OtelSpanBuilder::new(format!("parent-error-service-{test_id}"))
         .span_type(OtelSpanType::Span)
         .user_id(test_user_id.clone())
         .session_id(test_session_id.clone())
@@ -158,7 +158,7 @@ async fn test_remote_child_span_result_with_error() -> Result<(), Box<dyn std::e
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Create remote child span that will fail
-    let remote_attributes = OtelSpanBuilder::new(format!("failing-remote-operation-{}", test_id))
+    let remote_attributes = OtelSpanBuilder::new(format!("failing-remote-operation-{test_id}"))
         .span_type(OtelSpanType::Generation)
         .model("failing-remote-model")
         .user_id(test_user_id.clone())
@@ -214,15 +214,15 @@ async fn test_multiple_remote_child_spans() -> Result<(), Box<dyn std::error::Er
 
     // Test unique ID for this test run
     let test_id = format!("multi-remote-{}", chrono::Utc::now().timestamp());
-    let test_user_id = format!("user-{}", test_id);
-    let test_session_id = format!("session-{}", test_id);
+    let test_user_id = format!("user-{test_id}");
+    let test_session_id = format!("session-{test_id}");
 
     // Create different carriers for different services
     let mut carrier_service_a = HashMap::new();
     let mut carrier_service_b = HashMap::new();
 
     // Create parent spans for different services
-    let parent_a_attributes = OtelSpanBuilder::new(format!("parent-service-a-{}", test_id))
+    let parent_a_attributes = OtelSpanBuilder::new(format!("parent-service-a-{test_id}"))
         .span_type(OtelSpanType::Span)
         .user_id(test_user_id.clone())
         .session_id(test_session_id.clone())
@@ -231,7 +231,7 @@ async fn test_multiple_remote_child_spans() -> Result<(), Box<dyn std::error::Er
         .tags(vec!["distributed".to_string(), "service-a".to_string()])
         .build();
 
-    let parent_b_attributes = OtelSpanBuilder::new(format!("parent-service-b-{}", test_id))
+    let parent_b_attributes = OtelSpanBuilder::new(format!("parent-service-b-{test_id}"))
         .span_type(OtelSpanType::Span)
         .user_id(test_user_id.clone())
         .session_id(test_session_id.clone())
@@ -284,7 +284,7 @@ async fn test_multiple_remote_child_spans() -> Result<(), Box<dyn std::error::Er
     let (result_a, result_b) = tokio::join!(
         // Service A operation
         client.with_remote_child_span_result_and_response_parser(
-            OtelSpanBuilder::new(format!("remote-service-a-operation-{}", test_id))
+            OtelSpanBuilder::new(format!("remote-service-a-operation-{test_id}"))
                 .span_type(OtelSpanType::Generation)
                 .model("service-a-model")
                 .user_id(test_user_id.clone())
@@ -303,7 +303,7 @@ async fn test_multiple_remote_child_spans() -> Result<(), Box<dyn std::error::Er
         ),
         // Service B operation
         client.with_remote_child_span_result_and_response_parser(
-            OtelSpanBuilder::new(format!("remote-service-b-operation-{}", test_id))
+            OtelSpanBuilder::new(format!("remote-service-b-operation-{test_id}"))
                 .span_type(OtelSpanType::Generation)
                 .model("service-b-model")
                 .user_id(test_user_id.clone())
@@ -351,22 +351,21 @@ async fn test_remote_child_span_without_carrier() -> Result<(), Box<dyn std::err
 
     // Test unique ID for this test run
     let test_id = format!("no-carrier-{}", chrono::Utc::now().timestamp());
-    let test_user_id = format!("user-{}", test_id);
-    let test_session_id = format!("session-{}", test_id);
+    let test_user_id = format!("user-{test_id}");
+    let test_session_id = format!("session-{test_id}");
 
     // Empty carrier (no trace context)
     let empty_carrier = HashMap::new();
 
-    let remote_attributes =
-        OtelSpanBuilder::new(format!("standalone-remote-operation-{}", test_id))
-            .span_type(OtelSpanType::Span)
-            .user_id(test_user_id)
-            .session_id(test_session_id)
-            .system("standalone-service")
-            .operation_name("standalone_process")
-            .tags(vec!["standalone".to_string(), "no-parent".to_string()])
-            .input(json!({ "data": "standalone processing" }))
-            .build();
+    let remote_attributes = OtelSpanBuilder::new(format!("standalone-remote-operation-{test_id}"))
+        .span_type(OtelSpanType::Span)
+        .user_id(test_user_id)
+        .session_id(test_session_id)
+        .system("standalone-service")
+        .operation_name("standalone_process")
+        .tags(vec!["standalone".to_string(), "no-parent".to_string()])
+        .input(json!({ "data": "standalone processing" }))
+        .build();
 
     // Execute remote child span without parent context
     let result = client
@@ -397,8 +396,8 @@ async fn test_distributed_error_propagation() -> Result<(), Box<dyn std::error::
 
     // Test unique ID for this test run
     let test_id = format!("error-propagation-{}", chrono::Utc::now().timestamp());
-    let test_user_id = format!("user-{}", test_id);
-    let test_session_id = format!("session-{}", test_id);
+    let test_user_id = format!("user-{test_id}");
+    let test_session_id = format!("session-{test_id}");
 
     // Custom error types for different services
     #[derive(Debug)]
@@ -424,7 +423,7 @@ async fn test_distributed_error_propagation() -> Result<(), Box<dyn std::error::
     let carrier_b = HashMap::new();
 
     // Service A creates trace context
-    let parent_attributes = OtelSpanBuilder::new(format!("error-chain-parent-{}", test_id))
+    let parent_attributes = OtelSpanBuilder::new(format!("error-chain-parent-{test_id}"))
         .span_type(OtelSpanType::Span)
         .user_id(test_user_id.clone())
         .session_id(test_session_id.clone())
@@ -440,7 +439,7 @@ async fn test_distributed_error_propagation() -> Result<(), Box<dyn std::error::
     // Service A operation succeeds
     let service_a_result = client
         .with_remote_child_span_result(
-            OtelSpanBuilder::new(format!("service-a-{}", test_id))
+            OtelSpanBuilder::new(format!("service-a-{test_id}"))
                 .span_type(OtelSpanType::Span)
                 .user_id(test_user_id.clone())
                 .session_id(test_session_id.clone())
@@ -461,7 +460,7 @@ async fn test_distributed_error_propagation() -> Result<(), Box<dyn std::error::
     // Service B operation that fails
     let service_b_result = client
         .with_remote_child_span_result(
-            OtelSpanBuilder::new(format!("service-b-{}", test_id))
+            OtelSpanBuilder::new(format!("service-b-{test_id}"))
                 .span_type(OtelSpanType::Generation)
                 .model("service-b-model")
                 .user_id(test_user_id.clone())

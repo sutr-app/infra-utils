@@ -229,7 +229,7 @@ mod test {
         };
         let mut cli = super::new_redis_cluster_connection(config)
             .await
-            .inspect_err(|e| println!("error: {:?}", e))
+            .inspect_err(|e| println!("error: {e:?}"))
             .unwrap();
         cli.del::<&str, u32>("foo").await.unwrap();
         let v: Option<String> = cli.get("foo").await.unwrap();
@@ -312,7 +312,7 @@ mod test {
                 .blpop::<&str, (String, i64)>("foobl", 1.0)
                 .await
             {
-                println!("============ Blocking pop result on {}: {}", k, v);
+                println!("============ Blocking pop result on {k}: {v}");
             }
         });
 
