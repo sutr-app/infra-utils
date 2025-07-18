@@ -40,6 +40,31 @@ pub trait UseRedisClient: Send + Sync {
         }
     }
 
+    /// Subscribe with timeout setting
+    fn subscribe_with_timeout(
+        &self,
+        channel: &str,
+        read_timeout: Option<Duration>,
+    ) -> impl std::future::Future<Output = Result<PubSub>> + Send {
+        async move {
+            let mut pubsub = self.redis_client().get_async_pubsub().await?;
+
+            // Note: We'll handle timeout at the application level since redis-rs PubSub
+            // doesn't directly support read timeout. The timeout will be enforced
+            // by the calling code using tokio::select! and tokio::time::timeout.
+            if let Some(timeout) = read_timeout {
+                tracing::debug!(
+                    "Pubsub created with application-level timeout: {:?} for channel: {}",
+                    timeout,
+                    channel
+                );
+            }
+
+            pubsub.subscribe(channel).await?;
+            Ok(pubsub)
+        }
+    }
+
     fn unsubscribe(&self, channel: &str) -> impl std::future::Future<Output = Result<()>> + Send {
         async move {
             let mut pubsub = self.redis_client().get_async_pubsub().await?;
@@ -54,6 +79,28 @@ pub trait UseRedisClient: Send + Sync {
     ) -> impl std::future::Future<Output = Result<PubSub>> + Send {
         async move {
             let mut pubsub = self.redis_client().get_async_pubsub().await?;
+            pubsub.psubscribe(pchannel).await?;
+            Ok(pubsub)
+        }
+    }
+
+    fn psubscribe_with_timeout(
+        &self,
+        pchannel: &String,
+        read_timeout: Option<Duration>,
+    ) -> impl std::future::Future<Output = Result<PubSub>> + Send {
+        async move {
+            let mut pubsub = self.redis_client().get_async_pubsub().await?;
+
+            // Pattern subscribe timeout handled at application level
+            if let Some(timeout) = read_timeout {
+                tracing::debug!(
+                    "Pubsub pattern created with application-level timeout: {:?} for pattern: {}",
+                    timeout,
+                    pchannel
+                );
+            }
+
             pubsub.psubscribe(pchannel).await?;
             Ok(pubsub)
         }
