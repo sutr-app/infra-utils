@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
 use debug_stub_derive::DebugStub;
+
+pub mod error_utils;
 use log::LevelFilter;
 use serde::Deserialize;
 use sqlx::ConnectOptions;
