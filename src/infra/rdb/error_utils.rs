@@ -26,7 +26,7 @@ impl DatabaseErrorExt for &dyn DatabaseError {
         // MySQL duplicate entry error
         #[cfg(feature = "mysql")]
         {
-            if let Some(mysql_err) = self.try_downcast_ref::<sqlx::mysql::MySqlError>() {
+            if let Some(mysql_err) = self.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>() {
                 return mysql_err.number() == 1062; // ER_DUP_ENTRY
             }
         }
@@ -55,7 +55,7 @@ impl DatabaseErrorExt for &dyn DatabaseError {
         // MySQL foreign key constraint error
         #[cfg(feature = "mysql")]
         {
-            if let Some(mysql_err) = self.try_downcast_ref::<sqlx::mysql::MySqlError>() {
+            if let Some(mysql_err) = self.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>() {
                 return mysql_err.number() == 1452; // ER_NO_REFERENCED_ROW_2
             }
         }
@@ -83,7 +83,7 @@ impl DatabaseErrorExt for &dyn DatabaseError {
         // MySQL not null constraint error
         #[cfg(feature = "mysql")]
         {
-            if let Some(mysql_err) = self.try_downcast_ref::<sqlx::mysql::MySqlError>() {
+            if let Some(mysql_err) = self.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>() {
                 return mysql_err.number() == 1048; // ER_BAD_NULL_ERROR
             }
         }
