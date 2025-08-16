@@ -9,7 +9,7 @@ pub trait DatabaseErrorExt {
     /// Check if the database error is a foreign key constraint violation
     fn is_foreign_key_constraint_error(&self) -> bool;
 
-    /// Check if the database error is a not null constraint violation  
+    /// Check if the database error is a not null constraint violation
     fn is_not_null_constraint_error(&self) -> bool;
 }
 
