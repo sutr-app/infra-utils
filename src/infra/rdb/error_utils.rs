@@ -34,8 +34,8 @@ impl DatabaseErrorExt for &dyn DatabaseError {
         // PostgreSQL unique violation
         #[cfg(all(feature = "postgres", not(feature = "mysql")))]
         {
-            if let Some(pg_err) = self.try_downcast_ref::<sqlx::postgres::PgError>() {
-                return pg_err.code().code() == "23505"; // unique_violation
+            if let Some(pg_err) = self.try_downcast_ref::<sqlx::postgres::PgDatabaseError>() {
+                return pg_err.code() == "23505"; // unique_violation
             }
         }
 
@@ -63,8 +63,8 @@ impl DatabaseErrorExt for &dyn DatabaseError {
         // PostgreSQL foreign key violation
         #[cfg(all(feature = "postgres", not(feature = "mysql")))]
         {
-            if let Some(pg_err) = self.try_downcast_ref::<sqlx::postgres::PgError>() {
-                return pg_err.code().code() == "23503"; // foreign_key_violation
+            if let Some(pg_err) = self.try_downcast_ref::<sqlx::postgres::PgDatabaseError>() {
+                return pg_err.code() == "23503"; // foreign_key_violation
             }
         }
 
@@ -91,8 +91,8 @@ impl DatabaseErrorExt for &dyn DatabaseError {
         // PostgreSQL not null violation
         #[cfg(all(feature = "postgres", not(feature = "mysql")))]
         {
-            if let Some(pg_err) = self.try_downcast_ref::<sqlx::postgres::PgError>() {
-                return pg_err.code().code() == "23502"; // not_null_violation
+            if let Some(pg_err) = self.try_downcast_ref::<sqlx::postgres::PgDatabaseError>() {
+                return pg_err.code() == "23502"; // not_null_violation
             }
         }
 
