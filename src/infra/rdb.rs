@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use debug_stub_derive::DebugStub;
 
 pub mod error_utils;
+pub mod escape;
 use log::LevelFilter;
 use serde::Deserialize;
 use sqlx::ConnectOptions;
@@ -343,7 +344,7 @@ pub async fn new_rdb_pool(config: &RdbConfig, _sqlite_schema: Option<&String>) -
     // TODO set from config
     MySqlPoolOptions::new()
         .idle_timeout(Some(Duration::from_secs(10 * 60)))
-        .max_lifetime(Some(Duration::from_secs(10 * 60))) // same as mariadb server wait_timeout
+        .max_lifetime(Some(Duration::from_secs(10 * 60))) // same as mysql server wait_timeout
         .acquire_timeout(Duration::from_secs(5))
         // .test_before_acquire(false)
         .max_connections(config.max_connections())

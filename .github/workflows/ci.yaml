@@ -40,13 +40,13 @@ jobs:
     timeout-minutes: 30
     services:
       db:
-        image: mariadb:10.9
+        image: mysql:8
         ports:
           - 3306:3306
         env:
           MYSQL_HOST: 127.0.0.1
-          MYSQL_USER: maria
-          MYSQL_PASSWORD: maria
+          MYSQL_USER: mysql
+          MYSQL_PASSWORD: mysqlpw
           MYSQL_DATABASE: test
           MYSQL_ROOT_PASSWORD: ""
           MYSQL_ALLOW_EMPTY_PASSWORD: yes
