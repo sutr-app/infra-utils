@@ -309,12 +309,28 @@ pub async fn new_rdb_pool(config: &RdbConfig, init_schema: Option<&String>) -> R
 
 #[cfg(not(any(feature = "mysql", feature = "postgres")))]
 async fn setup_sqlite(p: &RdbPool, init_schema: Option<&String>) -> Result<()> {
-    sqlx::query::<Rdb>("PRAGMA journal_mode = WAL;")
-        .execute(p)
-        .await?;
-    sqlx::query::<Rdb>("PRAGMA synchronous  = NORMAL;")
-        .execute(p)
-        .await?;
+    // Use DELETE journal mode for tests to ensure cross-process visibility
+    // WAL mode can cause issues when test process writes data that worker process needs to read
+    let use_wal = std::env::var("SQLITE_DISABLE_WAL")
+        .map(|v| v != "1" && v.to_lowercase() != "true")
+        .unwrap_or(true);
+
+    if use_wal {
+        sqlx::query::<Rdb>("PRAGMA journal_mode = WAL;")
+            .execute(p)
+            .await?;
+        sqlx::query::<Rdb>("PRAGMA synchronous = NORMAL;")
+            .execute(p)
+            .await?;
+    } else {
+        tracing::info!("SQLite WAL disabled (SQLITE_DISABLE_WAL=1)");
+        sqlx::query::<Rdb>("PRAGMA journal_mode = DELETE;")
+            .execute(p)
+            .await?;
+        sqlx::query::<Rdb>("PRAGMA synchronous = FULL;")
+            .execute(p)
+            .await?;
+    }
     sqlx::query::<Rdb>("PRAGMA auto_vacuum = incremental")
         .execute(p)
         .await?;
