@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use debug_stub_derive::DebugStub;
 
 pub mod error_utils;
+pub mod escape;
 use log::LevelFilter;
 use serde::Deserialize;
 use sqlx::ConnectOptions;
@@ -308,12 +309,28 @@ pub async fn new_rdb_pool(config: &RdbConfig, init_schema: Option<&String>) -> R
 
 #[cfg(not(any(feature = "mysql", feature = "postgres")))]
 async fn setup_sqlite(p: &RdbPool, init_schema: Option<&String>) -> Result<()> {
-    sqlx::query::<Rdb>("PRAGMA journal_mode = WAL;")
-        .execute(p)
-        .await?;
-    sqlx::query::<Rdb>("PRAGMA synchronous  = NORMAL;")
-        .execute(p)
-        .await?;
+    // Use DELETE journal mode for tests to ensure cross-process visibility
+    // WAL mode can cause issues when test process writes data that worker process needs to read
+    let use_wal = std::env::var("SQLITE_DISABLE_WAL")
+        .map(|v| v != "1" && v.to_lowercase() != "true")
+        .unwrap_or(true);
+
+    if use_wal {
+        sqlx::query::<Rdb>("PRAGMA journal_mode = WAL;")
+            .execute(p)
+            .await?;
+        sqlx::query::<Rdb>("PRAGMA synchronous = NORMAL;")
+            .execute(p)
+            .await?;
+    } else {
+        tracing::info!("SQLite WAL disabled (SQLITE_DISABLE_WAL=1)");
+        sqlx::query::<Rdb>("PRAGMA journal_mode = DELETE;")
+            .execute(p)
+            .await?;
+        sqlx::query::<Rdb>("PRAGMA synchronous = FULL;")
+            .execute(p)
+            .await?;
+    }
     sqlx::query::<Rdb>("PRAGMA auto_vacuum = incremental")
         .execute(p)
         .await?;
@@ -343,7 +360,7 @@ pub async fn new_rdb_pool(config: &RdbConfig, _sqlite_schema: Option<&String>) -
     // TODO set from config
     MySqlPoolOptions::new()
         .idle_timeout(Some(Duration::from_secs(10 * 60)))
-        .max_lifetime(Some(Duration::from_secs(10 * 60))) // same as mariadb server wait_timeout
+        .max_lifetime(Some(Duration::from_secs(10 * 60))) // same as mysql server wait_timeout
         .acquire_timeout(Duration::from_secs(5))
         // .test_before_acquire(false)
         .max_connections(config.max_connections())

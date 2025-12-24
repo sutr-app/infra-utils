@@ -197,7 +197,6 @@ mod test {
     use anyhow::Result;
     use deadpool_redis::cluster::Pool;
     use redis::AsyncCommands;
-    use serde::Deserialize;
     // use serde_with::apply;
 
     #[tokio::test]
