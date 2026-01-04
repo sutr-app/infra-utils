@@ -1,12 +1,16 @@
 use anyhow::anyhow;
 use anyhow::Result;
-use deadpool_redis::redis::AsyncCommands as PoolAsyncCommands;
-use deadpool_redis::{Config, Connection, Pool, Runtime};
+use bb8::ManageConnection;
+use bb8::Pool;
+use bb8::PooledConnection;
 use debug_stub_derive::DebugStub;
 use futures::stream::BoxStream;
 use redis::aio::MultiplexedConnection as RedisConnection;
 use redis::aio::PubSub;
+use redis::AsyncCommands;
+use redis::AsyncConnectionConfig;
 use redis::Client;
+use redis::RedisError;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -20,13 +24,77 @@ pub struct RedisConfig {
     #[debug_stub = "[PASSWORD]"]
     pub password: Option<String>,
     pub url: String,
-    pub pool_create_timeout_msec: Option<u32>,
-    pub pool_wait_timeout_msec: Option<u32>,
-    pub pool_recycle_timeout_msec: Option<u32>,
+    pub pool_connection_timeout_msec: Option<u64>,
+    pub pool_idle_timeout_msec: Option<u64>,
+    pub pool_max_lifetime_msec: Option<u64>,
     pub pool_size: usize,
+    pub pool_min_idle: Option<u32>,
+    /// Set to `true` for blocking operations like BLPOP that may wait indefinitely.
+    /// When `true`, disables the response timeout on connections.
+    /// Default is `false` (uses redis-rs default timeout).
+    #[serde(default)]
+    pub blocking: bool,
 }
 
-pub type RedisPool = Pool;
+/// Custom bb8 connection manager for Redis.
+///
+/// # Why not use redis-rs's built-in bb8 feature?
+///
+/// redis-rs 1.0.2 introduced default response timeouts in `get_multiplexed_async_connection()`.
+/// The built-in bb8 feature (`redis = { features = ["bb8"] }`) uses this method directly
+/// without allowing `AsyncConnectionConfig` customization.
+///
+/// This causes blocking operations like BLPOP to timeout immediately instead of waiting
+/// indefinitely. Since both redis-rs's bb8 feature and the bb8-redis crate have this limitation,
+/// we implement our own `ManageConnection` to use `get_multiplexed_async_connection_with_config()`
+/// with `response_timeout: None` when `blocking = true`.
+///
+/// When redis-rs's bb8 feature supports `AsyncConnectionConfig`, this can be replaced.
+#[derive(Clone, Debug)]
+pub struct RedisConnectionManager {
+    client: Client,
+    blocking: bool,
+}
+
+impl RedisConnectionManager {
+    pub fn new(client: Client, blocking: bool) -> Self {
+        Self { client, blocking }
+    }
+}
+
+impl ManageConnection for RedisConnectionManager {
+    type Connection = RedisConnection;
+    type Error = RedisError;
+
+    async fn connect(&self) -> Result<Self::Connection, Self::Error> {
+        if self.blocking {
+            let config = AsyncConnectionConfig::new().set_response_timeout(None);
+            self.client
+                .get_multiplexed_async_connection_with_config(&config)
+                .await
+        } else {
+            self.client.get_multiplexed_async_connection().await
+        }
+    }
+
+    async fn is_valid(&self, conn: &mut Self::Connection) -> Result<(), Self::Error> {
+        let pong: String = redis::cmd("PING").query_async(conn).await?;
+        match pong.as_str() {
+            "PONG" => Ok(()),
+            _ => Err(RedisError::from((
+                redis::ErrorKind::Io,
+                "ping validation failed",
+                pong,
+            ))),
+        }
+    }
+
+    fn has_broken(&self, _: &mut Self::Connection) -> bool {
+        false
+    }
+}
+
+pub type RedisPool = Pool<RedisConnectionManager>;
 pub type RedisClient = redis::Client;
 
 pub trait UseRedisClient: Send + Sync {
@@ -180,11 +248,6 @@ pub trait UseRedisClient: Send + Sync {
         channel: &str,
     ) -> impl std::future::Future<Output = Result<(String, i64)>> + Send {
         async move {
-            // let mut conn = self
-            //     .redis_client()
-            //     .get_multiplexed_async_connection()
-            //     .await?;
-
             let subscriptions_counts: HashMap<String, u32> = redis::cmd("PUBSUB")
                 .arg("NUMSUB")
                 .arg(channel)
@@ -201,11 +264,32 @@ pub trait UseRedisConnection {
 }
 
 pub trait UseRedisPool: Send + Sync {
-    fn redis_pool(&self) -> &Pool;
+    fn redis_pool(&self) -> &RedisPool;
 
-    fn connection(&self) -> impl std::future::Future<Output = Result<Connection>> + Send {
+    fn connection(
+        &self,
+    ) -> impl std::future::Future<Output = Result<PooledConnection<'_, RedisConnectionManager>>> + Send
+    {
         async {
             self.redis_pool()
+                .get()
+                .await
+                .map_err(|e| anyhow!("{:?}", e))
+        }
+    }
+}
+
+/// Trait for accessing a Redis pool configured for blocking operations like BLPOP.
+/// This pool has response_timeout disabled to allow indefinite waiting.
+pub trait UseRedisBlockingPool: Send + Sync {
+    fn redis_blocking_pool(&self) -> &RedisPool;
+
+    fn blocking_connection(
+        &self,
+    ) -> impl std::future::Future<Output = Result<PooledConnection<'_, RedisConnectionManager>>> + Send
+    {
+        async {
+            self.redis_blocking_pool()
                 .get()
                 .await
                 .map_err(|e| anyhow!("{:?}", e))
@@ -228,39 +312,42 @@ pub async fn new_redis_connection(config: RedisConfig) -> Result<RedisConnection
         .map_err(|e| anyhow!("redis init error: {:?}", e))
 }
 
-// pooling for multiple blocking connections
+// pooling for multiple connections (supports blocking operations via config.blocking)
 pub async fn new_redis_pool(config: RedisConfig) -> Result<RedisPool> {
-    let conf = Config::from_url(config.url.clone());
-    conf.builder()
-        .map(|b| {
-            b.max_size(config.pool_size)
-                .create_timeout(
-                    config
-                        .pool_create_timeout_msec
-                        .map(|s| Duration::from_millis(s as u64)),
-                )
-                .wait_timeout(
-                    // same timeout for create
-                    config
-                        .pool_wait_timeout_msec
-                        .map(|s| Duration::from_millis(s as u64)),
-                )
-                .recycle_timeout(
-                    // same timeout for create
-                    config
-                        .pool_recycle_timeout_msec
-                        .map(|s| Duration::from_millis(s as u64)),
-                )
-                .runtime(Runtime::Tokio1)
-                .build()
-                .unwrap()
-        })
-        .map_err(|e| {
-            anyhow!(format!(
-                "redis pool init error: config={:?}, {:?}",
-                &config, e
-            ))
-        })
+    let client = Client::open(config.url.clone())?;
+    let manager = RedisConnectionManager::new(client, config.blocking);
+
+    let pool_size: u32 = config.pool_size.try_into().map_err(|_| {
+        anyhow!(
+            "pool_size {} exceeds maximum value of {} for Redis pool",
+            config.pool_size,
+            u32::MAX
+        )
+    })?;
+    let mut builder = Pool::builder().max_size(pool_size);
+
+    if let Some(timeout) = config.pool_connection_timeout_msec {
+        builder = builder.connection_timeout(Duration::from_millis(timeout));
+    }
+
+    if let Some(timeout) = config.pool_idle_timeout_msec {
+        builder = builder.idle_timeout(Some(Duration::from_millis(timeout)));
+    }
+
+    if let Some(timeout) = config.pool_max_lifetime_msec {
+        builder = builder.max_lifetime(Some(Duration::from_millis(timeout)));
+    }
+
+    if let Some(min_idle) = config.pool_min_idle {
+        builder = builder.min_idle(Some(min_idle));
+    }
+
+    builder.build(manager).await.map_err(|e| {
+        anyhow!(format!(
+            "redis pool init error: config={:?}, {:?}",
+            &config, e
+        ))
+    })
 }
 
 pub trait UseRedisLock: UseRedisPool + Send + Sync {
@@ -273,23 +360,29 @@ pub trait UseRedisLock: UseRedisPool + Send + Sync {
             let mut con = self.redis_pool().get().await?;
             // use redis set cmd with nx and ex option to lock
             let k = key.into();
+            // SET NX returns nil when key already exists (lock not acquired)
+            // so use Option<String> to handle both "OK" and nil responses
             match redis::cmd("SET")
                 .arg(&k)
                 .arg(Self::lock_value())
                 .arg("NX")
                 .arg("EX")
                 .arg(expire_sec)
-                .query_async(&mut con)
+                .query_async::<Option<String>>(&mut *con)
                 .await
             {
-                Ok(lock) => {
+                Ok(Some(lock)) => {
                     if Self::is_ok(lock) {
                         Ok(())
                     } else {
-                        // TODO log
                         tracing::debug!("failed to lock:{:?}", &k);
                         Err(anyhow!("failed to lock:{:?}", &k))
                     }
+                }
+                Ok(None) => {
+                    // nil response means key already exists (lock held by another)
+                    tracing::debug!("failed to lock (key exists):{:?}", &k);
+                    Err(anyhow!("failed to lock:{:?}", &k))
                 }
                 Err(e) => {
                     // unlock if error? (comment out for pesimistic lock but may make process slow (locked until expire time, so set expiretime not too long))
@@ -331,14 +424,14 @@ pub trait UseRedisLock: UseRedisPool + Send + Sync {
 // #[cfg(feature = "redis-test")]
 #[cfg(test)]
 mod test {
+    use super::RedisPool;
     use crate::infra::{
         redis::{new_redis_connection, new_redis_pool, RedisClient, UseRedisLock, UseRedisPool},
         test::REDIS_CONFIG,
     };
     use anyhow::Result;
-    use deadpool_redis::redis::AsyncCommands as PoolAsyncCommands;
-    use deadpool_redis::Pool;
     use futures::StreamExt;
+    use redis::AsyncCommands;
     use serde::{Deserialize, Serialize};
 
     #[tokio::test]
@@ -390,25 +483,18 @@ mod test {
 
     #[tokio::test]
     async fn pool_test() -> Result<()> {
-        use redis::AsyncCommands;
-        // use std::time::Duration;
-
-        // tracing_subscriber::fmt()
-        //     .with_max_level(tracing::Level::DEBUG)
-        //     .init();
-
         #[derive(Clone)]
-        struct RedisPool {
-            pool: Pool,
+        struct TestRedisPool {
+            pool: RedisPool,
         }
-        impl UseRedisPool for RedisPool {
-            fn redis_pool(&self) -> &Pool {
+        impl UseRedisPool for TestRedisPool {
+            fn redis_pool(&self) -> &RedisPool {
                 &self.pool
             }
         }
         let config = REDIS_CONFIG.clone();
         let p = new_redis_pool(config).await.unwrap();
-        let client = RedisPool { pool: p };
+        let client = TestRedisPool { pool: p };
         let th_p = client.clone();
         // blocking (pop)
         let pop_jh = tokio::spawn(async move {
@@ -486,28 +572,33 @@ mod test {
     async fn lock_unlock_test() -> Result<()> {
         use crate::infra::test::REDIS_CONFIG;
         #[derive(Clone)]
-        struct RedisPool {
-            pool: Pool,
+        struct TestRedisPool {
+            pool: RedisPool,
         }
-        impl UseRedisPool for RedisPool {
-            fn redis_pool(&self) -> &Pool {
+        impl UseRedisPool for TestRedisPool {
+            fn redis_pool(&self) -> &RedisPool {
                 &self.pool
             }
         }
-        impl UseRedisLock for RedisPool {}
+        impl UseRedisLock for TestRedisPool {}
 
         let config = REDIS_CONFIG.clone();
         let p = new_redis_pool(config).await.unwrap();
-        let client = RedisPool { pool: p };
-        let key = "lock_test";
-        client.lock(key, 10).await?;
+        let client = TestRedisPool { pool: p };
+        // Use unique key to avoid interference between test runs with different features
+        let key = format!("lock_test_{}", std::process::id());
+        // Clean up any stale lock from previous failed runs
+        let _ = client.unlock(&key).await;
+
+        client.lock(&key, 10).await?;
         // try lock
-        assert!(client.lock(key, 10).await.is_err());
+        assert!(client.lock(&key, 10).await.is_err());
         // unlock
-        client.unlock(key).await?;
+        client.unlock(&key).await?;
         // try lock again
-        assert!(client.lock(key, 10).await.is_ok());
-        // for end
+        assert!(client.lock(&key, 10).await.is_ok());
+        // Clean up: unlock at the end to avoid affecting subsequent test runs
+        client.unlock(&key).await?;
         Ok(())
     }
 
@@ -515,34 +606,35 @@ mod test {
     async fn use_redis_client_pubsub_test() -> Result<()> {
         use crate::infra::redis::UseRedisClient;
         #[derive(Clone)]
-        struct RedisPool {
-            pool: Pool,
+        struct TestRedisPool {
+            pool: RedisPool,
             client: RedisClient,
         }
-        impl UseRedisPool for RedisPool {
-            fn redis_pool(&self) -> &Pool {
+        impl UseRedisPool for TestRedisPool {
+            fn redis_pool(&self) -> &RedisPool {
                 &self.pool
             }
         }
-        impl UseRedisClient for RedisPool {
+        impl UseRedisClient for TestRedisPool {
             fn redis_client(&self) -> &RedisClient {
                 &self.client
             }
         }
         let config = REDIS_CONFIG.clone();
         let p = new_redis_pool(config.clone()).await?;
-        let client = RedisPool {
+        let client = TestRedisPool {
             pool: p,
             client: RedisClient::open(config.url)?,
         };
-        let ch = "test";
-        let mut sub = client.subscribe(ch).await?;
+        // Use unique channel name to avoid test interference
+        let ch = format!("test_pubsub_{}", std::process::id());
+        let mut sub = client.subscribe(&ch).await?;
         let mut conn = client
             .redis_client()
             .get_multiplexed_async_connection()
             .await?;
-        assert_eq!(client.numsub(&mut conn, ch).await?, (ch.to_string(), 1));
-        let pb = client.publish(ch, &vec![1, 2, 3]).await?;
+        assert_eq!(client.numsub(&mut conn, &ch).await?, (ch.to_string(), 1));
+        let pb = client.publish(&ch, &vec![1, 2, 3]).await?;
         assert!(pb == 1);
         let msg = sub.on_message().next().await.unwrap();
         assert_eq!(msg.get_payload::<Vec<u8>>().unwrap(), vec![1, 2, 3]);
@@ -553,28 +645,30 @@ mod test {
     async fn use_redis_client_pubsub_test2() -> Result<()> {
         use crate::infra::redis::UseRedisClient;
         #[derive(Clone)]
-        struct RedisPool {
-            pool: Pool,
+        struct TestRedisPool {
+            pool: RedisPool,
             client: RedisClient,
         }
-        impl UseRedisPool for RedisPool {
-            fn redis_pool(&self) -> &Pool {
+        impl UseRedisPool for TestRedisPool {
+            fn redis_pool(&self) -> &RedisPool {
                 &self.pool
             }
         }
-        impl UseRedisClient for RedisPool {
+        impl UseRedisClient for TestRedisPool {
             fn redis_client(&self) -> &RedisClient {
                 &self.client
             }
         }
         let config = REDIS_CONFIG.clone();
         let p = new_redis_pool(config.clone()).await?;
-        let client = RedisPool {
+        let client = TestRedisPool {
             pool: p,
             client: RedisClient::open(config.url)?,
         };
-        let ch = "test".to_string();
-        let ch2 = "test2".to_string();
+        // Use unique channel names to avoid test interference
+        let pid = std::process::id();
+        let ch = format!("test_pubsub2_ch1_{}", pid);
+        let ch2 = format!("test_pubsub2_ch2_{}", pid);
         let pb = client.publish(ch.as_str(), &vec![0, 1]).await?;
         assert!(pb == 0);
         let pb = client
