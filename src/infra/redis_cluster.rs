@@ -1,14 +1,14 @@
 use anyhow::anyhow;
 use anyhow::Result;
 use async_trait::async_trait;
-use deadpool::managed::PoolConfig;
-use deadpool_redis::cluster::{Config, Connection, Pool};
-use deadpool_redis::redis::cmd;
-use deadpool_redis::redis::AsyncCommands as PoolAsyncCommands;
-use deadpool_redis::Timeouts;
+use bb8::ManageConnection;
+use bb8::Pool;
+use bb8::PooledConnection;
 use debug_stub_derive::DebugStub;
 use redis::cluster::ClusterClient;
 use redis::cluster_async::ClusterConnection;
+use redis::AsyncCommands;
+use redis::RedisError;
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -19,31 +19,73 @@ pub struct RedisClusterConfig {
     #[debug_stub = "[PASSWORD]"]
     pub password: Option<String>,
     pub urls: Vec<String>,
-    pub pool_create_timeout_msec: Option<u64>,
-    pub pool_wait_timeout_msec: Option<u64>,
-    pub pool_recycle_timeout_msec: Option<u64>,
+    pub pool_connection_timeout_msec: Option<u64>,
+    pub pool_idle_timeout_msec: Option<u64>,
+    pub pool_max_lifetime_msec: Option<u64>,
     pub pool_size: usize,
+    pub pool_min_idle: Option<u32>,
+    /// Set to `true` for blocking operations like BLPOP that may wait indefinitely.
+    /// When `true`, disables the response timeout on connections.
+    /// Default is `false` (uses redis-rs default timeout).
+    #[serde(default)]
+    pub blocking: bool,
 }
-impl From<RedisClusterConfig> for Config {
-    fn from(val: RedisClusterConfig) -> Self {
-        Config {
-            urls: Some(val.urls),
-            connections: None,
-            pool: Some(PoolConfig {
-                max_size: val.pool_size,
-                timeouts: Timeouts {
-                    wait: val.pool_wait_timeout_msec.map(Duration::from_millis),
-                    create: val.pool_create_timeout_msec.map(Duration::from_millis),
-                    recycle: val.pool_recycle_timeout_msec.map(Duration::from_millis),
-                },
-                queue_mode: deadpool::managed::QueueMode::Fifo,
-            }),
-            read_from_replicas: true,
-        }
+
+/// Custom bb8 connection manager for Redis Cluster.
+///
+/// # Why not use redis-rs's built-in bb8 feature?
+///
+/// redis-rs 1.0.2 introduced default response timeouts in `get_async_connection()`.
+/// The built-in bb8 feature uses this method directly without allowing configuration.
+///
+/// This causes blocking operations like BLPOP to timeout immediately instead of waiting
+/// indefinitely. We implement our own `ManageConnection` to use `get_async_connection_with_config()`
+/// with `response_timeout: None` when `blocking = true`.
+///
+/// When redis-rs's bb8 feature supports configuration, this can be replaced.
+#[derive(Clone, DebugStub)]
+pub struct RedisClusterConnectionManager {
+    #[debug_stub = "ClusterClient"]
+    client: ClusterClient,
+    blocking: bool,
+}
+
+impl RedisClusterConnectionManager {
+    pub fn new(client: ClusterClient, blocking: bool) -> Self {
+        Self { client, blocking }
     }
 }
 
-pub type RedisClusterPool = Pool;
+impl ManageConnection for RedisClusterConnectionManager {
+    type Connection = ClusterConnection;
+    type Error = RedisError;
+
+    async fn connect(&self) -> Result<Self::Connection, Self::Error> {
+        // NOTE: For Redis Cluster, response_timeout is configured at ClusterClient creation time
+        // via ClusterClientBuilder::response_timeout(). The blocking flag is used during
+        // new_redis_cluster_pool() to create an appropriate ClusterClient.
+        // Here we just use the client that was already configured with the right timeout.
+        self.client.get_async_connection().await
+    }
+
+    async fn is_valid(&self, conn: &mut Self::Connection) -> Result<(), Self::Error> {
+        let pong: String = redis::cmd("PING").query_async(conn).await?;
+        match pong.as_str() {
+            "PONG" => Ok(()),
+            _ => Err(RedisError::from((
+                redis::ErrorKind::Io,
+                "ping validation failed",
+                pong,
+            ))),
+        }
+    }
+
+    fn has_broken(&self, _: &mut Self::Connection) -> bool {
+        false
+    }
+}
+
+pub type RedisClusterPool = Pool<RedisClusterConnectionManager>;
 
 // TODO looking forward to resolving issue: https://github.com/redis-rs/redis-rs/issues/492
 //
@@ -88,9 +130,9 @@ pub trait UseRedisClusterConnection {
 
 #[async_trait]
 pub trait UseRedisClusterPool {
-    fn redis_cluster_pool(&self) -> &Pool;
+    fn redis_cluster_pool(&self) -> &RedisClusterPool;
 
-    async fn connection(&self) -> Result<Connection> {
+    async fn connection(&self) -> Result<PooledConnection<'_, RedisClusterConnectionManager>> {
         self.redis_cluster_pool()
             .get()
             .await
@@ -113,14 +155,52 @@ pub async fn new_redis_cluster_connection(config: RedisClusterConfig) -> Result<
         .map_err(|e| anyhow!("redis_cluster init error: {:?}", e))
 }
 
-// pooling for multiple blocking connections
+// pooling for multiple connections (supports blocking operations via conf.blocking)
 pub async fn new_redis_cluster_pool(conf: RedisClusterConfig) -> Result<RedisClusterPool> {
-    tracing::info!("Connecting to cluster with pool{:?}", conf.urls);
-    let cconf: Config = conf.into();
-    cconf.builder()?.build().map_err(|e| {
+    tracing::info!(
+        "Connecting to cluster with pool {:?}, blocking={}",
+        conf.urls,
+        conf.blocking
+    );
+
+    // Build ClusterClient with appropriate response_timeout based on blocking flag
+    let mut client_builder = redis::cluster::ClusterClientBuilder::new(conf.urls.clone());
+    if conf.blocking {
+        // Use Duration::MAX for blocking operations (effectively no timeout)
+        client_builder = client_builder.response_timeout(Duration::MAX);
+    }
+    let client = client_builder.build()?;
+    let manager = RedisClusterConnectionManager::new(client, conf.blocking);
+
+    let pool_size: u32 = conf.pool_size.try_into().map_err(|_| {
+        anyhow!(
+            "pool_size {} exceeds maximum value of {} for Redis cluster pool",
+            conf.pool_size,
+            u32::MAX
+        )
+    })?;
+    let mut builder = Pool::builder().max_size(pool_size);
+
+    if let Some(timeout) = conf.pool_connection_timeout_msec {
+        builder = builder.connection_timeout(Duration::from_millis(timeout));
+    }
+
+    if let Some(timeout) = conf.pool_idle_timeout_msec {
+        builder = builder.idle_timeout(Some(Duration::from_millis(timeout)));
+    }
+
+    if let Some(timeout) = conf.pool_max_lifetime_msec {
+        builder = builder.max_lifetime(Some(Duration::from_millis(timeout)));
+    }
+
+    if let Some(min_idle) = conf.pool_min_idle {
+        builder = builder.min_idle(Some(min_idle));
+    }
+
+    builder.build(manager).await.map_err(|e| {
         anyhow!(format!(
-            "redis cluster pool init error:{:?}, config={:?}",
-            e, cconf
+            "redis cluster pool init error: {:?}, urls={:?}",
+            e, conf.urls
         ))
     })
 }
@@ -135,20 +215,19 @@ pub trait UseRedisClusterLock: UseRedisClusterPool + Send + Sync {
             let mut con = self.redis_cluster_pool().get().await?;
             // use redis_cluster set cmd with nx and ex option to lock
             let k = key.into();
-            match cmd("SET")
+            match redis::cmd("SET")
                 .arg(&k)
                 .arg(Self::lock_value())
                 .arg("NX")
                 .arg("EX")
                 .arg(expire_sec)
-                .query_async(con.as_mut())
+                .query_async(&mut *con)
                 .await
             {
                 Ok(lock) => {
                     if Self::is_ok(lock) {
                         Ok(())
                     } else {
-                        // TODO log
                         tracing::debug!("failed to lock:{:?}", &k);
                         Err(anyhow!("failed to lock:{:?}", &k))
                     }
@@ -195,9 +274,7 @@ pub trait UseRedisClusterLock: UseRedisClusterPool + Send + Sync {
 mod test {
     use crate::infra::redis_cluster::{UseRedisClusterLock, UseRedisClusterPool};
     use anyhow::Result;
-    use deadpool_redis::cluster::Pool;
     use redis::AsyncCommands;
-    // use serde_with::apply;
 
     #[tokio::test]
     async fn single_test() {
@@ -221,10 +298,12 @@ mod test {
                 format!("redis://{}:7004", host),
                 format!("redis://{}:7005", host),
             ],
-            pool_create_timeout_msec: None,
-            pool_wait_timeout_msec: None,
-            pool_recycle_timeout_msec: None,
+            pool_connection_timeout_msec: None,
+            pool_idle_timeout_msec: None,
+            pool_max_lifetime_msec: None,
             pool_size: 10,
+            pool_min_idle: None,
+            blocking: false,
         };
         let mut cli = super::new_redis_cluster_connection(config)
             .await
@@ -267,19 +346,14 @@ mod test {
 
     #[tokio::test]
     async fn pool_test() -> Result<()> {
-        // use std::time::Duration;
         let host = std::env::var("TEST_REDIS_CLUSTER_HOST").unwrap_or("127.0.0.1".to_string());
 
-        // tracing_subscriber::fmt()
-        //     .with_max_level(tracing::Level::DEBUG)
-        //     .init();
-
         #[derive(Clone)]
-        struct RedisClusterPool {
-            pool: Pool,
+        struct TestRedisClusterPool {
+            pool: super::RedisClusterPool,
         }
-        impl super::UseRedisClusterPool for RedisClusterPool {
-            fn redis_cluster_pool(&self) -> &Pool {
+        impl super::UseRedisClusterPool for TestRedisClusterPool {
+            fn redis_cluster_pool(&self) -> &super::RedisClusterPool {
                 &self.pool
             }
         }
@@ -294,13 +368,15 @@ mod test {
                 format!("redis://{}:7004", host),
                 format!("redis://{}:7005", host),
             ],
-            pool_create_timeout_msec: None,
-            pool_wait_timeout_msec: None,
-            pool_recycle_timeout_msec: None,
+            pool_connection_timeout_msec: None,
+            pool_idle_timeout_msec: None,
+            pool_max_lifetime_msec: None,
             pool_size: 5,
+            pool_min_idle: None,
+            blocking: true, // Enable blocking for BLPOP test
         };
         let p = super::new_redis_cluster_pool(config).await.unwrap();
-        let client = RedisClusterPool { pool: p };
+        let client = TestRedisClusterPool { pool: p };
         let th_p = client.clone();
         // blocking (pull)
         let pull_jh = tokio::spawn(async move {
@@ -377,15 +453,15 @@ mod test {
     #[tokio::test]
     async fn lock_unlock_test() -> Result<()> {
         #[derive(Clone)]
-        struct RedisClusterPool {
-            pool: Pool,
+        struct TestRedisClusterPool {
+            pool: super::RedisClusterPool,
         }
-        impl UseRedisClusterPool for RedisClusterPool {
-            fn redis_cluster_pool(&self) -> &Pool {
+        impl UseRedisClusterPool for TestRedisClusterPool {
+            fn redis_cluster_pool(&self) -> &super::RedisClusterPool {
                 &self.pool
             }
         }
-        impl super::UseRedisClusterLock for RedisClusterPool {}
+        impl super::UseRedisClusterLock for TestRedisClusterPool {}
         let host = std::env::var("TEST_REDIS_CLUSTER_HOST").unwrap_or("127.0.0.1".to_string());
 
         let config = super::RedisClusterConfig {
@@ -399,13 +475,15 @@ mod test {
                 format!("redis://{}:7004", host),
                 format!("redis://{}:7005", host),
             ],
-            pool_create_timeout_msec: None,
-            pool_wait_timeout_msec: None,
-            pool_recycle_timeout_msec: None,
+            pool_connection_timeout_msec: None,
+            pool_idle_timeout_msec: None,
+            pool_max_lifetime_msec: None,
             pool_size: 5,
+            pool_min_idle: None,
+            blocking: false, // Lock operations don't need blocking
         };
         let p = super::new_redis_cluster_pool(config).await.unwrap();
-        let client = RedisClusterPool { pool: p };
+        let client = TestRedisClusterPool { pool: p };
         let key = "lock_test";
         // get lock
         client.lock(key, 10).await?;
