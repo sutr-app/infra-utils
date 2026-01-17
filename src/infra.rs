@@ -17,8 +17,13 @@ pub mod test {
     // ref. https://qiita.com/autotaker1984/items/d0ae2d7feb148ffb8989
     // ref. https://github.com/launchbadge/sqlx/issues/2881
     // ref. https://github.com/kingwingfly/share_runtime_example
+    //
+    // NOTE: Using multi_thread runtime to avoid deadlocks in stream! macro contexts
+    // that use RwLock. Single-threaded runtime causes deadlock when stream needs
+    // to acquire locks while being polled.
     pub static TEST_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
-        tokio::runtime::Builder::new_current_thread()
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
             .enable_all()
             .build()
             .unwrap()
