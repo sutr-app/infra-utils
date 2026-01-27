@@ -1,14 +1,14 @@
-use anyhow::anyhow;
 use anyhow::Result;
+use anyhow::anyhow;
 use async_trait::async_trait;
 use bb8::ManageConnection;
 use bb8::Pool;
 use bb8::PooledConnection;
 use debug_stub_derive::DebugStub;
-use redis::cluster::ClusterClient;
-use redis::cluster_async::ClusterConnection;
 use redis::AsyncCommands;
 use redis::RedisError;
+use redis::cluster::ClusterClient;
+use redis::cluster_async::ClusterConnection;
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -314,10 +314,11 @@ mod test {
 
         // use the pool like any other RedisClusterClient with the Deref trait
         assert_eq!(None, v);
-        assert!(cli
-            .set_ex::<&str, &str, bool>("foo", "bar", 30)
-            .await
-            .unwrap());
+        assert!(
+            cli.set_ex::<&str, &str, bool>("foo", "bar", 30)
+                .await
+                .unwrap()
+        );
         assert_eq!(
             "bar".to_string(),
             cli.get::<&str, String>("foo").await.unwrap()
@@ -328,10 +329,11 @@ mod test {
             mail: "taro@example.com".to_string(),
         };
         // set serialized user1
-        assert!(cli
-            .set_ex::<&str, String, bool>("user1", serde_json::to_string(&user1).unwrap(), 30,)
-            .await
-            .unwrap());
+        assert!(
+            cli.set_ex::<&str, String, bool>("user1", serde_json::to_string(&user1).unwrap(), 30,)
+                .await
+                .unwrap()
+        );
         // get and deserialize user1 string
         if let Ok(st) = cli.get::<&str, Option<String>>("user1").await {
             assert_eq!(
@@ -423,13 +425,15 @@ mod test {
         );
         // push for blpop
         for idx in 0..50i64 {
-            assert!(client
-                .connection()
-                .await
-                .unwrap()
-                .rpush::<&str, i64, bool>("foobl", idx)
-                .await
-                .is_ok());
+            assert!(
+                client
+                    .connection()
+                    .await
+                    .unwrap()
+                    .rpush::<&str, i64, bool>("foobl", idx)
+                    .await
+                    .is_ok()
+            );
             // tokio::time::sleep(Duration::from_millis(100)).await;
         }
         assert_eq!(Ok(true), client.connection().await.unwrap().del(key).await);
