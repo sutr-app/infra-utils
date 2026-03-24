@@ -82,11 +82,12 @@ pub mod test {
 
     #[cfg(feature = "mysql")]
     pub async fn truncate_tables(pool: &RdbPool, tables: Vec<&str>) {
-        let sql = tables
-            .iter()
-            .map(|t| format!("TRUNCATE TABLE {t};"))
-            .collect::<Vec<String>>()
-            .join(" ");
+        // Disable FK checks so tables with foreign key references can be truncated in any order
+        let mut sql = String::from("SET FOREIGN_KEY_CHECKS = 0; ");
+        for t in &tables {
+            sql.push_str(&format!("TRUNCATE TABLE {t}; "));
+        }
+        sql.push_str("SET FOREIGN_KEY_CHECKS = 1;");
         sqlx::raw_sql(sql.as_str())
             .execute(pool)
             .await
@@ -176,6 +177,11 @@ pub mod test {
 
     #[cfg(not(any(feature = "mysql", feature = "postgres")))]
     async fn _setup_sqlite_internal<T: Into<String>>(dir: T) -> Result<RdbPool> {
+        // Remove stale test DB so schema changes don't cause checksum mismatch
+        let db_path = std::path::Path::new("./test_db.sqlite3");
+        if db_path.exists() {
+            std::fs::remove_file(db_path)?;
+        }
         let pool = crate::infra::rdb::new_rdb_pool(&SQLITE_CONFIG, None).await?;
         Migrator::new(std::path::Path::new(&dir.into()))
             .await?
