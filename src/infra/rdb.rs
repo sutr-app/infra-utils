@@ -279,9 +279,9 @@ impl RdbConfigTrait for RdbConfig {
 pub async fn new_rdb_pool(config: &RdbConfig, init_schema: Option<&String>) -> Result<RdbPool> {
     use anyhow::anyhow;
     use sqlx::{
+        Sqlite,
         migrate::MigrateDatabase,
         sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-        Sqlite,
     };
     tracing::debug!("new sqlite pool: {}", config.rdb_url());
     // create db file if not exists

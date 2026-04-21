@@ -17,8 +17,13 @@ pub mod test {
     // ref. https://qiita.com/autotaker1984/items/d0ae2d7feb148ffb8989
     // ref. https://github.com/launchbadge/sqlx/issues/2881
     // ref. https://github.com/kingwingfly/share_runtime_example
+    //
+    // NOTE: Using multi_thread runtime to avoid deadlocks in stream! macro contexts
+    // that use RwLock. Single-threaded runtime causes deadlock when stream needs
+    // to acquire locks while being polled.
     pub static TEST_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
-        tokio::runtime::Builder::new_current_thread()
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
             .enable_all()
             .build()
             .unwrap()
@@ -77,11 +82,12 @@ pub mod test {
 
     #[cfg(feature = "mysql")]
     pub async fn truncate_tables(pool: &RdbPool, tables: Vec<&str>) {
-        let sql = tables
-            .iter()
-            .map(|t| format!("TRUNCATE TABLE {t};"))
-            .collect::<Vec<String>>()
-            .join(" ");
+        // Disable FK checks so tables with foreign key references can be truncated in any order
+        let mut sql = String::from("SET FOREIGN_KEY_CHECKS = 0; ");
+        for t in &tables {
+            sql.push_str(&format!("TRUNCATE TABLE {t}; "));
+        }
+        sql.push_str("SET FOREIGN_KEY_CHECKS = 1;");
         sqlx::raw_sql(sql.as_str())
             .execute(pool)
             .await
@@ -171,6 +177,11 @@ pub mod test {
 
     #[cfg(not(any(feature = "mysql", feature = "postgres")))]
     async fn _setup_sqlite_internal<T: Into<String>>(dir: T) -> Result<RdbPool> {
+        // Remove stale test DB so schema changes don't cause checksum mismatch
+        let db_path = std::path::Path::new("./test_db.sqlite3");
+        if db_path.exists() {
+            std::fs::remove_file(db_path)?;
+        }
         let pool = crate::infra::rdb::new_rdb_pool(&SQLITE_CONFIG, None).await?;
         Migrator::new(std::path::Path::new(&dir.into()))
             .await?
@@ -199,17 +210,25 @@ pub mod test {
             username: None,
             password: None,
             url,
-            pool_create_timeout_msec: None,
-            pool_wait_timeout_msec: None,
-            pool_recycle_timeout_msec: None,
+            pool_connection_timeout_msec: None,
+            pool_idle_timeout_msec: None,
+            pool_max_lifetime_msec: None,
             pool_size: 20,
+            pool_min_idle: None,
+            blocking: false,
         }
     });
 
     static REDIS: tokio::sync::OnceCell<RedisPool> = tokio::sync::OnceCell::const_new();
+    static REDIS_BLOCKING: tokio::sync::OnceCell<RedisPool> = tokio::sync::OnceCell::const_new();
 
     pub async fn setup_test_redis_pool() -> &'static RedisPool {
         setup_redis_pool(REDIS_CONFIG.clone()).await
+    }
+    pub async fn setup_test_redis_blocking_pool() -> &'static RedisPool {
+        let mut config = REDIS_CONFIG.clone();
+        config.blocking = true;
+        setup_redis_blocking_pool(config).await
     }
     pub fn setup_test_redis_client() -> Result<RedisClient> {
         crate::infra::redis::new_redis_client(REDIS_CONFIG.clone())
@@ -219,7 +238,18 @@ pub mod test {
             .get_or_init(|| async {
                 crate::infra::redis::new_redis_pool(config)
                     .await
-                    .expect("msg")
+                    .expect("failed to initialize test redis pool")
+            })
+            .await
+    }
+    pub async fn setup_redis_blocking_pool(config: RedisConfig) -> &'static RedisPool {
+        REDIS_BLOCKING
+            .get_or_init(|| async {
+                let mut blocking_config = config;
+                blocking_config.blocking = true;
+                crate::infra::redis::new_redis_pool(blocking_config)
+                    .await
+                    .expect("failed to initialize test redis blocking pool")
             })
             .await
     }
