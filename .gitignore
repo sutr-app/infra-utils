@@ -1,0 +1,4 @@
+^\._*
+target/
+*.sqlite3*
+
