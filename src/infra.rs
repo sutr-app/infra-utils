@@ -88,7 +88,8 @@ pub mod test {
             sql.push_str(&format!("TRUNCATE TABLE {t}; "));
         }
         sql.push_str("SET FOREIGN_KEY_CHECKS = 1;");
-        sqlx::raw_sql(sql.as_str())
+        // AssertSqlSafe: table names come from the test harness, not external input.
+        sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
             .execute(pool)
             .await
             .expect("truncate all tables");
@@ -142,7 +143,7 @@ pub mod test {
             .map(|t| format!("TRUNCATE TABLE {};", t))
             .collect::<Vec<String>>()
             .join(" ");
-        sqlx::raw_sql(sql.as_str())
+        sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
             .execute(pool)
             .await
             .expect("truncate all tables");
@@ -197,7 +198,7 @@ pub mod test {
             .map(|t| format!("DELETE FROM '{t}'; DELETE FROM SQLITE_SEQUENCE WHERE name = '{t}'; "))
             .collect::<Vec<String>>()
             .join(" ");
-        sqlx::raw_sql(sql.as_str())
+        sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
             .execute(pool)
             .await
             .unwrap_or_else(|_| panic!("delete tables: {}", tables.join(",")));

@@ -45,7 +45,7 @@ pub type RdbArguments = sqlx::mysql::MySqlArguments;
 #[cfg(all(feature = "postgres", not(feature = "mysql")))]
 pub type RdbArguments = sqlx::postgres::PgArguments;
 #[cfg(not(any(feature = "mysql", feature = "postgres")))]
-pub type RdbArguments<'a> = sqlx::sqlite::SqliteArguments<'a>;
+pub type RdbArguments = sqlx::sqlite::SqliteArguments;
 
 pub trait RdbConfigTrait: Clone {
     fn rdb_url(&self) -> String;
@@ -335,7 +335,11 @@ async fn setup_sqlite(p: &RdbPool, init_schema: Option<&String>) -> Result<()> {
         .execute(p)
         .await?;
     if let Some(init_schema) = init_schema {
-        sqlx::raw_sql(init_schema.as_str()).execute(p).await?;
+        // AssertSqlSafe: schema text is statically bundled and contains no user input.
+        // raw_sql needs a `'static` owner, hence the owned copy.
+        sqlx::raw_sql(sqlx::AssertSqlSafe(init_schema.to_string()))
+            .execute(p)
+            .await?;
     }
     Ok(())
 }
