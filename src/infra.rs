@@ -69,6 +69,10 @@ pub mod test {
                 let pool = crate::infra::rdb::new_rdb_pool(&MYSQL_CONFIG, None)
                     .await
                     .unwrap();
+                sqlx::query("DROP TABLE IF EXISTS _sqlx_migrations;")
+                    .execute(&pool)
+                    .await
+                    .unwrap();
                 Migrator::new(std::path::Path::new(&dir.into()))
                     .await
                     .unwrap()
