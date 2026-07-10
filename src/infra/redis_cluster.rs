@@ -229,7 +229,7 @@ pub trait UseRedisClusterLock: UseRedisClusterPool + Send + Sync {
                         Ok(())
                     } else {
                         tracing::debug!("failed to lock:{:?}", &k);
-                        Err(anyhow!("failed to lock:{:?}", &k))
+                        Err(anyhow!("failed to lock:{:?}", k))
                     }
                 }
                 Err(e) => {

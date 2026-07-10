@@ -241,19 +241,19 @@ impl RdbConfig {
             .or_else(|| Self::load_db_url_config_from_env(prefix))
     }
     fn load_separated_db_config_from_env(prefix: String) -> Option<RdbConfig> {
-        envy::prefixed(format!("{}{}", &prefix, "SQLITE_"))
+        envy::prefixed(format!("{}{}", prefix, "SQLITE_"))
             .from_env::<RdbConfigImpl>()
             .or_else(|_| {
-                envy::prefixed(format!("{}{}", &prefix, "MYSQL_")).from_env::<RdbConfigImpl>()
+                envy::prefixed(format!("{}{}", prefix, "MYSQL_")).from_env::<RdbConfigImpl>()
             })
             .map(RdbConfig::Separate)
             .ok()
     }
     fn load_db_url_config_from_env(prefix: String) -> Option<RdbConfig> {
-        envy::prefixed(format!("{}{}", &prefix, "SQLITE_"))
+        envy::prefixed(format!("{}{}", prefix, "SQLITE_"))
             .from_env::<RdbUrlConfigImpl>()
             .or_else(|_| {
-                envy::prefixed(format!("{}{}", &prefix, "MYSQL_")).from_env::<RdbUrlConfigImpl>()
+                envy::prefixed(format!("{}{}", prefix, "MYSQL_")).from_env::<RdbUrlConfigImpl>()
             })
             .map(RdbConfig::Url)
             .ok()

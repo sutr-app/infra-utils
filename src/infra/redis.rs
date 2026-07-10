@@ -345,7 +345,7 @@ pub async fn new_redis_pool(config: RedisConfig) -> Result<RedisPool> {
     builder.build(manager).await.map_err(|e| {
         anyhow!(format!(
             "redis pool init error: config={:?}, {:?}",
-            &config, e
+            config, e
         ))
     })
 }
@@ -376,13 +376,13 @@ pub trait UseRedisLock: UseRedisPool + Send + Sync {
                         Ok(())
                     } else {
                         tracing::debug!("failed to lock:{:?}", &k);
-                        Err(anyhow!("failed to lock:{:?}", &k))
+                        Err(anyhow!("failed to lock:{:?}", k))
                     }
                 }
                 Ok(None) => {
                     // nil response means key already exists (lock held by another)
                     tracing::debug!("failed to lock (key exists):{:?}", &k);
-                    Err(anyhow!("failed to lock:{:?}", &k))
+                    Err(anyhow!("failed to lock:{:?}", k))
                 }
                 Err(e) => {
                     // unlock if error? (comment out for pesimistic lock but may make process slow (locked until expire time, so set expiretime not too long))
