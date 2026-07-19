@@ -182,17 +182,58 @@ pub mod test {
 
     #[cfg(not(any(feature = "mysql", feature = "postgres")))]
     async fn _setup_sqlite_internal<T: Into<String>>(dir: T) -> Result<RdbPool> {
-        // Remove stale test DB so schema changes don't cause checksum mismatch
+        // Remove stale SQLite state so interrupted tests cannot retain WAL locks.
         let db_path = std::path::Path::new("./test_db.sqlite3");
-        if db_path.exists() {
-            std::fs::remove_file(db_path)?;
-        }
+        remove_sqlite_database_files(db_path)?;
         let pool = crate::infra::rdb::new_rdb_pool(&SQLITE_CONFIG, None).await?;
         Migrator::new(std::path::Path::new(&dir.into()))
             .await?
             .run(&pool)
             .await?;
         Ok(pool)
+    }
+
+    #[cfg(not(any(feature = "mysql", feature = "postgres")))]
+    fn remove_sqlite_database_files(db_path: &std::path::Path) -> Result<()> {
+        let mut paths = vec![db_path.to_path_buf()];
+        for suffix in ["wal", "shm"] {
+            paths.push(std::path::PathBuf::from(format!(
+                "{}-{suffix}",
+                db_path.display()
+            )));
+        }
+
+        for path in paths {
+            if let Err(error) = std::fs::remove_file(path)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(error.into());
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(all(test, not(any(feature = "mysql", feature = "postgres"))))]
+    #[test]
+    fn remove_sqlite_database_files_removes_database_and_sidecars() {
+        let test_dir =
+            std::env::temp_dir().join(format!("infra-utils-sqlite-cleanup-{}", std::process::id()));
+        std::fs::create_dir_all(&test_dir).unwrap();
+        let database = test_dir.join("test.sqlite3");
+        for path in [
+            database.clone(),
+            std::path::PathBuf::from(format!("{}-wal", database.display())),
+            std::path::PathBuf::from(format!("{}-shm", database.display())),
+        ] {
+            std::fs::write(path, []).unwrap();
+        }
+
+        remove_sqlite_database_files(&database).unwrap();
+
+        assert!(!database.exists());
+        assert!(!std::path::PathBuf::from(format!("{}-wal", database.display())).exists());
+        assert!(!std::path::PathBuf::from(format!("{}-shm", database.display())).exists());
+        std::fs::remove_dir(&test_dir).unwrap();
     }
 
     #[cfg(not(any(feature = "mysql", feature = "postgres")))]
