@@ -139,8 +139,8 @@ impl Default for RdbConfigImpl {
         RdbConfigImpl {
             host: "127.0.0.1".to_string(),
             port: "5432".to_string(),
-            user: "mysql".to_string(),
-            password: "mysql".to_string(),
+            user: "postgres".to_string(),
+            password: "postgres".to_string(),
             dbname: "default".to_string(),
             max_connections: DEFAULT_MAX_CONNECTIONS,
         }
@@ -185,10 +185,27 @@ impl RdbConfigTrait for RdbUrlConfigImpl {
 }
 
 impl Default for RdbUrlConfigImpl {
+    #[cfg(not(any(feature = "mysql", feature = "postgres")))]
     fn default() -> Self {
         tracing::info!("Use default RDBConfig (sqlite3).");
         RdbUrlConfigImpl {
             url: "sqlite://default.sqlite3".to_string(),
+            max_connections: DEFAULT_MAX_CONNECTIONS,
+        }
+    }
+    #[cfg(feature = "mysql")]
+    fn default() -> Self {
+        tracing::info!("Use default RDBConfig (mysql).");
+        RdbUrlConfigImpl {
+            url: "mysql://mysql:mysql@127.0.0.1:3306/default".to_string(),
+            max_connections: DEFAULT_MAX_CONNECTIONS,
+        }
+    }
+    #[cfg(all(feature = "postgres", not(feature = "mysql")))]
+    fn default() -> Self {
+        tracing::info!("Use default RDBConfig (postgres).");
+        RdbUrlConfigImpl {
+            url: "postgres://postgres:postgres@127.0.0.1:5432/default".to_string(),
             max_connections: DEFAULT_MAX_CONNECTIONS,
         }
     }
@@ -206,6 +223,13 @@ mod config_tests {
     const CURRENT_DB_URL_ENV: (&str, &str) = ("POSTGRES_", "postgres://user:password@db:5432/app");
     #[cfg(not(any(feature = "mysql", feature = "postgres")))]
     const CURRENT_DB_URL_ENV: (&str, &str) = ("SQLITE_", "sqlite://configured.sqlite3");
+
+    #[cfg(feature = "mysql")]
+    const CURRENT_DEFAULT_DB_URL: &str = "mysql://mysql:mysql@127.0.0.1:3306/default";
+    #[cfg(all(feature = "postgres", not(feature = "mysql")))]
+    const CURRENT_DEFAULT_DB_URL: &str = "postgres://postgres:postgres@127.0.0.1:5432/default";
+    #[cfg(not(any(feature = "mysql", feature = "postgres")))]
+    const CURRENT_DEFAULT_DB_URL: &str = "sqlite://default.sqlite3";
 
     #[cfg(feature = "mysql")]
     const UNSUPPORTED_DB_ENV_PREFIX: &str = "POSTGRES_";
@@ -266,6 +290,15 @@ mod config_tests {
         .expect("URL configuration should deserialize");
 
         assert_eq!(config.max_connections(), 42);
+    }
+
+    #[test]
+    fn default_configs_use_current_database_url() {
+        assert_eq!(RdbConfigImpl::default().rdb_url(), CURRENT_DEFAULT_DB_URL);
+        assert_eq!(
+            RdbUrlConfigImpl::default().rdb_url(),
+            CURRENT_DEFAULT_DB_URL
+        );
     }
 
     #[test]
