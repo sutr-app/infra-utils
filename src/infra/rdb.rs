@@ -4,9 +4,15 @@ use debug_stub_derive::DebugStub;
 pub mod error_utils;
 pub mod escape;
 use log::LevelFilter;
-use serde::Deserialize;
+use serde::{Deserialize, de::DeserializeOwned};
 use sqlx::ConnectOptions;
 use std::time::Duration;
+
+const DEFAULT_MAX_CONNECTIONS: u32 = 5;
+
+fn default_max_connections() -> u32 {
+    DEFAULT_MAX_CONNECTIONS
+}
 
 // cannot make default future off: https://stackoverflow.com/questions/63782238/remove-crate-feature
 // cannot select feature mutually exclusive: https://github.com/rust-lang/cargo/issues/2980
@@ -60,7 +66,7 @@ impl RdbConfigImpl {
             user,
             password,
             dbname,
-            max_connections: 20,
+            max_connections: DEFAULT_MAX_CONNECTIONS,
         }
     }
 }
@@ -74,6 +80,7 @@ pub struct RdbConfigImpl {
     #[debug_stub = "[PASSWORD]"]
     pub password: String,
     pub dbname: String,
+    #[serde(default = "default_max_connections")]
     pub max_connections: u32,
 }
 
@@ -111,7 +118,7 @@ impl Default for RdbConfigImpl {
             user: "".to_string(),
             password: "".to_string(),
             dbname: "default.sqlite3".to_string(),
-            max_connections: 20,
+            max_connections: DEFAULT_MAX_CONNECTIONS,
         }
     }
     #[cfg(feature = "mysql")]
@@ -123,7 +130,7 @@ impl Default for RdbConfigImpl {
             user: "mysql".to_string(),
             password: "mysql".to_string(),
             dbname: "default".to_string(),
-            max_connections: 20,
+            max_connections: DEFAULT_MAX_CONNECTIONS,
         }
     }
     #[cfg(all(feature = "postgres", not(feature = "mysql")))]
@@ -135,7 +142,7 @@ impl Default for RdbConfigImpl {
             user: "mysql".to_string(),
             password: "mysql".to_string(),
             dbname: "default".to_string(),
-            max_connections: 20,
+            max_connections: DEFAULT_MAX_CONNECTIONS,
         }
     }
 }
@@ -143,6 +150,7 @@ impl Default for RdbConfigImpl {
 #[derive(Deserialize, Clone, DebugStub)]
 pub struct RdbUrlConfigImpl {
     pub url: String,
+    #[serde(default = "default_max_connections")]
     pub max_connections: u32,
 }
 
@@ -181,30 +189,105 @@ impl Default for RdbUrlConfigImpl {
         tracing::info!("Use default RDBConfig (sqlite3).");
         RdbUrlConfigImpl {
             url: "sqlite://default.sqlite3".to_string(),
-            max_connections: 20,
+            max_connections: DEFAULT_MAX_CONNECTIONS,
         }
     }
 }
 
-#[test]
-fn url_test() {
-    let conf = RdbConfigImpl {
-        host: "127.0.0.1".to_string(),
-        port: "1111".to_string(),
-        user: "hoge_user".to_string(),
-        password: "pass".to_string(),
-        dbname: "db".to_string(),
-        max_connections: 20,
+#[cfg(test)]
+mod config_tests {
+    use super::{
+        DEFAULT_MAX_CONNECTIONS, RdbConfig, RdbConfigImpl, RdbConfigTrait, RdbUrlConfigImpl,
     };
+
     #[cfg(feature = "mysql")]
-    assert_eq!(conf.rdb_url(), "mysql://hoge_user:pass@127.0.0.1:1111/db");
+    const CURRENT_DB_URL_ENV: (&str, &str) = ("MYSQL_", "mysql://user:password@db:3306/app");
     #[cfg(all(feature = "postgres", not(feature = "mysql")))]
-    assert_eq!(
-        conf.rdb_url(),
-        "postgres://hoge_user:pass@127.0.0.1:1111/db"
-    );
+    const CURRENT_DB_URL_ENV: (&str, &str) = ("POSTGRES_", "postgres://user:password@db:5432/app");
     #[cfg(not(any(feature = "mysql", feature = "postgres")))]
-    assert_eq!(conf.rdb_url(), "sqlite://db");
+    const CURRENT_DB_URL_ENV: (&str, &str) = ("SQLITE_", "sqlite://configured.sqlite3");
+
+    #[cfg(feature = "mysql")]
+    const UNSUPPORTED_DB_ENV_PREFIX: &str = "POSTGRES_";
+    #[cfg(all(feature = "postgres", not(feature = "mysql")))]
+    const UNSUPPORTED_DB_ENV_PREFIX: &str = "MYSQL_";
+    #[cfg(not(any(feature = "mysql", feature = "postgres")))]
+    const UNSUPPORTED_DB_ENV_PREFIX: &str = "POSTGRES_";
+
+    #[test]
+    fn url_config_uses_default_max_connections_when_omitted() {
+        let (db_prefix, url) = CURRENT_DB_URL_ENV;
+        let config = RdbConfig::load_db_url_config_from_slice(
+            "APP_",
+            &[(format!("APP_{db_prefix}URL"), url.to_string())],
+        )
+        .expect("URL-only configuration should load");
+
+        let RdbConfig::Url(config) = config else {
+            panic!("expected URL configuration");
+        };
+        assert_eq!(config.url, url);
+        assert_eq!(config.max_connections(), DEFAULT_MAX_CONNECTIONS);
+    }
+
+    #[test]
+    fn url_config_ignores_unsupported_database_environment_variables() {
+        let config = RdbConfig::load_db_url_config_from_slice(
+            "APP_",
+            &[(
+                format!("APP_{UNSUPPORTED_DB_ENV_PREFIX}URL"),
+                "unsupported://database".to_string(),
+            )],
+        );
+
+        assert!(config.is_none());
+    }
+
+    #[test]
+    fn separated_config_uses_default_max_connections_when_omitted() {
+        let config = envy::from_iter::<_, RdbConfigImpl>(vec![
+            ("HOST".to_string(), "db".to_string()),
+            ("PORT".to_string(), "3306".to_string()),
+            ("USER".to_string(), "user".to_string()),
+            ("PASSWORD".to_string(), "password".to_string()),
+            ("DBNAME".to_string(), "app".to_string()),
+        ])
+        .expect("separated configuration should deserialize");
+
+        assert_eq!(config.max_connections(), DEFAULT_MAX_CONNECTIONS);
+    }
+
+    #[test]
+    fn url_config_deserializes_explicit_max_connections() {
+        let config = envy::from_iter::<_, RdbUrlConfigImpl>(vec![
+            ("URL".to_string(), "sqlite://configured.sqlite3".to_string()),
+            ("MAX_CONNECTIONS".to_string(), "42".to_string()),
+        ])
+        .expect("URL configuration should deserialize");
+
+        assert_eq!(config.max_connections(), 42);
+    }
+
+    #[test]
+    fn url_test() {
+        let conf = RdbConfigImpl {
+            host: "127.0.0.1".to_string(),
+            port: "1111".to_string(),
+            user: "hoge_user".to_string(),
+            password: "pass".to_string(),
+            dbname: "db".to_string(),
+            max_connections: super::DEFAULT_MAX_CONNECTIONS,
+        };
+        #[cfg(feature = "mysql")]
+        assert_eq!(conf.rdb_url(), "mysql://hoge_user:pass@127.0.0.1:1111/db");
+        #[cfg(all(feature = "postgres", not(feature = "mysql")))]
+        assert_eq!(
+            conf.rdb_url(),
+            "postgres://hoge_user:pass@127.0.0.1:1111/db"
+        );
+        #[cfg(not(any(feature = "mysql", feature = "postgres")))]
+        assert_eq!(conf.rdb_url(), "sqlite://db");
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -212,6 +295,7 @@ pub enum RdbConfig {
     Separate(RdbConfigImpl),
     Url(RdbUrlConfigImpl),
 }
+
 impl RdbConfig {
     pub fn new_by_url(url: &str, max_connections: u32) -> Self {
         RdbConfig::Url(RdbUrlConfigImpl {
@@ -237,27 +321,41 @@ impl RdbConfig {
         })
     }
     pub fn load_db_config_from_env(prefix: String) -> Option<RdbConfig> {
-        Self::load_separated_db_config_from_env(prefix.clone())
-            .or_else(|| Self::load_db_url_config_from_env(prefix))
+        let environment = std::env::vars().collect::<Vec<_>>();
+        Self::load_separated_db_config_from_slice(&prefix, &environment)
+            .or_else(|| Self::load_db_url_config_from_slice(&prefix, &environment))
     }
-    fn load_separated_db_config_from_env(prefix: String) -> Option<RdbConfig> {
-        envy::prefixed(format!("{}{}", prefix, "SQLITE_"))
-            .from_env::<RdbConfigImpl>()
-            .or_else(|_| {
-                envy::prefixed(format!("{}{}", prefix, "MYSQL_")).from_env::<RdbConfigImpl>()
-            })
-            .map(RdbConfig::Separate)
+    fn load_separated_db_config_from_slice(
+        prefix: &str,
+        environment: &[(String, String)],
+    ) -> Option<RdbConfig> {
+        try_db_prefixes::<RdbConfigImpl>(prefix, environment).map(RdbConfig::Separate)
+    }
+    fn load_db_url_config_from_slice(
+        prefix: &str,
+        environment: &[(String, String)],
+    ) -> Option<RdbConfig> {
+        try_db_prefixes::<RdbUrlConfigImpl>(prefix, environment).map(RdbConfig::Url)
+    }
+}
+
+#[cfg(feature = "mysql")]
+const DB_CONFIG_ENV_PREFIXES: [&str; 1] = ["MYSQL_"];
+#[cfg(all(feature = "postgres", not(feature = "mysql")))]
+const DB_CONFIG_ENV_PREFIXES: [&str; 1] = ["POSTGRES_"];
+#[cfg(not(any(feature = "mysql", feature = "postgres")))]
+const DB_CONFIG_ENV_PREFIXES: [&str; 1] = ["SQLITE_"];
+
+/// Deserializes `T` from environment variables for the database selected at build time.
+fn try_db_prefixes<T: DeserializeOwned>(
+    prefix: &str,
+    environment: &[(String, String)],
+) -> Option<T> {
+    DB_CONFIG_ENV_PREFIXES.into_iter().find_map(|db_prefix| {
+        envy::prefixed(format!("{prefix}{db_prefix}"))
+            .from_iter(environment.iter().cloned())
             .ok()
-    }
-    fn load_db_url_config_from_env(prefix: String) -> Option<RdbConfig> {
-        envy::prefixed(format!("{}{}", prefix, "SQLITE_"))
-            .from_env::<RdbUrlConfigImpl>()
-            .or_else(|_| {
-                envy::prefixed(format!("{}{}", prefix, "MYSQL_")).from_env::<RdbUrlConfigImpl>()
-            })
-            .map(RdbConfig::Url)
-            .ok()
-    }
+    })
 }
 
 impl RdbConfigTrait for RdbConfig {
@@ -461,7 +559,7 @@ pub mod test {
                 "".to_string(),
                 "".to_string(),
                 "test.sqlite3".to_string(),
-                20,
+                super::DEFAULT_MAX_CONNECTIONS,
             ),
             None,
         )
