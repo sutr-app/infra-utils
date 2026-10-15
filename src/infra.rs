@@ -13,7 +13,9 @@ pub mod test {
     use sqlx::migrate::Migrator;
     use tokio::{runtime::Runtime, sync::OnceCell};
 
-    // destroy runtime, destroy connection pool, so use as static in all test
+    // Tests using the static RDB pool MUST run on this runtime, not
+    // #[tokio::test]: sqlx returns connections via a task on the current
+    // runtime, so a per-test runtime leaks pool slots (PoolTimedOut on MySQL).
     // ref. https://qiita.com/autotaker1984/items/d0ae2d7feb148ffb8989
     // ref. https://github.com/launchbadge/sqlx/issues/2881
     // ref. https://github.com/kingwingfly/share_runtime_example
