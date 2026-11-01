@@ -295,10 +295,29 @@ pub mod test {
             .get_or_init(|| async {
                 let mut blocking_config = config;
                 blocking_config.blocking = true;
-                crate::infra::redis::new_redis_pool(blocking_config)
-                    .await
-                    .expect("failed to initialize test redis blocking pool")
+                crate::infra::redis::new_named_redis_pool(
+                    blocking_config,
+                    &TEST_REDIS_BLOCKING_CLIENT_NAME,
+                )
+                .await
+                .expect("failed to initialize test redis blocking pool")
             })
             .await
+    }
+
+    /// Server-side name of the test blocking pool's connections. It includes the
+    /// process id so a cleanup only touches this process's connections.
+    pub static TEST_REDIS_BLOCKING_CLIENT_NAME: Lazy<String> =
+        Lazy::new(|| format!("infra-utils-test-blocking-{}", std::process::id()));
+
+    /// Closes the test blocking pool's connections that are still blocked on the
+    /// server, e.g. a BLPOP abandoned by a stopped worker, which would otherwise
+    /// pop elements meant for later tests. The pool replaces them on next use.
+    pub async fn release_test_redis_blocking_clients() -> Result<usize> {
+        crate::infra::redis::kill_blocked_clients(
+            &setup_test_redis_client()?,
+            &TEST_REDIS_BLOCKING_CLIENT_NAME,
+        )
+        .await
     }
 }

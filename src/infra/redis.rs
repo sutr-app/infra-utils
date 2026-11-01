@@ -54,11 +54,23 @@ pub struct RedisConfig {
 pub struct RedisConnectionManager {
     client: Client,
     blocking: bool,
+    /// Sent with `CLIENT SETNAME` on every new connection, so the server-side
+    /// clients of this pool can be found (e.g. by [`kill_blocked_clients`]).
+    client_name: Option<String>,
 }
 
 impl RedisConnectionManager {
     pub fn new(client: Client, blocking: bool) -> Self {
-        Self { client, blocking }
+        Self {
+            client,
+            blocking,
+            client_name: None,
+        }
+    }
+
+    pub fn with_client_name(mut self, client_name: impl Into<String>) -> Self {
+        self.client_name = Some(client_name.into());
+        self
     }
 }
 
@@ -67,14 +79,18 @@ impl ManageConnection for RedisConnectionManager {
     type Error = RedisError;
 
     async fn connect(&self) -> Result<Self::Connection, Self::Error> {
-        if self.blocking {
+        let mut connection = if self.blocking {
             let config = AsyncConnectionConfig::new().set_response_timeout(None);
             self.client
                 .get_multiplexed_async_connection_with_config(&config)
-                .await
+                .await?
         } else {
-            self.client.get_multiplexed_async_connection().await
+            self.client.get_multiplexed_async_connection().await?
+        };
+        if let Some(name) = &self.client_name {
+            connection.client_setname::<_, ()>(name).await?;
         }
+        Ok(connection)
     }
 
     async fn is_valid(&self, conn: &mut Self::Connection) -> Result<(), Self::Error> {
@@ -314,9 +330,20 @@ pub async fn new_redis_connection(config: RedisConfig) -> Result<RedisConnection
 
 // pooling for multiple connections (supports blocking operations via config.blocking)
 pub async fn new_redis_pool(config: RedisConfig) -> Result<RedisPool> {
-    let client = Client::open(config.url.clone())?;
-    let manager = RedisConnectionManager::new(client, config.blocking);
+    build_redis_pool(config, None).await
+}
 
+/// [`new_redis_pool`] whose connections carry `client_name` on the server.
+pub async fn new_named_redis_pool(config: RedisConfig, client_name: &str) -> Result<RedisPool> {
+    build_redis_pool(config, Some(client_name)).await
+}
+
+async fn build_redis_pool(config: RedisConfig, client_name: Option<&str>) -> Result<RedisPool> {
+    let client = Client::open(config.url.clone())?;
+    let mut manager = RedisConnectionManager::new(client, config.blocking);
+    if let Some(name) = client_name {
+        manager = manager.with_client_name(name);
+    }
     let pool_size: u32 = config.pool_size.try_into().map_err(|_| {
         anyhow!(
             "pool_size {} exceeds maximum value of {} for Redis pool",
@@ -348,6 +375,54 @@ pub async fn new_redis_pool(config: RedisConfig) -> Result<RedisPool> {
             config, e
         ))
     })
+}
+
+/// Closes the server-side connections named `client_name` that are blocked in a
+/// command such as BLPOP, and returns how many it closed.
+///
+/// A blocking command whose future was dropped keeps waiting on the server, and
+/// it can still pop an element that nobody reads; closing its connection ends it.
+/// Uses a connection of its own, so it works while the pool's are blocked.
+pub async fn kill_blocked_clients(client: &RedisClient, client_name: &str) -> Result<usize> {
+    let mut connection = client.get_multiplexed_async_connection().await?;
+    let list: String = redis::cmd("CLIENT")
+        .arg("LIST")
+        .arg("TYPE")
+        .arg("normal")
+        .query_async(&mut connection)
+        .await?;
+    let mut closed = 0;
+    for id in blocked_client_ids(&list, client_name) {
+        // A client that is already gone is not an error: it is no longer blocked.
+        let killed: redis::RedisResult<i64> = redis::cmd("CLIENT")
+            .arg("KILL")
+            .arg("ID")
+            .arg(id)
+            .query_async(&mut connection)
+            .await;
+        if matches!(killed, Ok(n) if n > 0) {
+            closed += 1;
+        }
+    }
+    Ok(closed)
+}
+
+/// Ids in a `CLIENT LIST` reply of the clients named `client_name` that are
+/// blocked (`b` in their flags).
+fn blocked_client_ids(client_list: &str, client_name: &str) -> Vec<u64> {
+    client_list
+        .lines()
+        .filter_map(|line| {
+            let field = |key: &str| {
+                line.split_whitespace()
+                    .find_map(|pair| pair.strip_prefix(key)?.strip_prefix('='))
+            };
+            let blocked = field("flags").is_some_and(|flags| flags.contains('b'));
+            (blocked && field("name") == Some(client_name))
+                .then(|| field("id")?.parse().ok())
+                .flatten()
+        })
+        .collect()
 }
 
 pub trait UseRedisLock: UseRedisPool + Send + Sync {
@@ -704,6 +779,79 @@ mod test {
         assert_eq!(msg2.get_payload::<Vec<u8>>().unwrap(), vec![1, 2, 3]);
 
         // for end
+        Ok(())
+    }
+
+    #[test]
+    fn blocked_client_ids_selects_blocked_clients_with_the_name() {
+        let list = "id=3 addr=127.0.0.1:50001 fd=8 name=pool-a age=1 idle=0 flags=b db=0 cmd=blpop\n\
+                    id=4 addr=127.0.0.1:50002 fd=9 name=pool-a age=1 idle=0 flags=N db=0 cmd=ping\n\
+                    id=5 addr=127.0.0.1:50003 fd=10 name=pool-b age=1 idle=0 flags=b db=0 cmd=blpop\n\
+                    id=6 addr=127.0.0.1:50004 fd=11 name= age=1 idle=0 flags=b db=0 cmd=blpop\n\
+                    id=7 addr=127.0.0.1:50005 fd=12 name=pool-a age=1 idle=0 flags=b db=0 cmd=brpop\n";
+        assert_eq!(super::blocked_client_ids(list, "pool-a"), vec![3, 7]);
+        assert!(super::blocked_client_ids(list, "pool-c").is_empty());
+        assert!(super::blocked_client_ids("", "pool-a").is_empty());
+        // A name that only prefixes another name does not match.
+        assert!(super::blocked_client_ids(list, "pool").is_empty());
+    }
+
+    #[tokio::test]
+    async fn kill_blocked_clients_closes_only_named_blocked_connections() -> Result<()> {
+        use super::{kill_blocked_clients, new_named_redis_pool, new_redis_client};
+        use std::time::Duration;
+
+        let name = format!("infra-utils-kill-test-{}", std::process::id());
+        let mut config = REDIS_CONFIG.clone();
+        config.blocking = true;
+        config.pool_size = 2;
+        let pool = new_named_redis_pool(config, &name).await?;
+        let client = new_redis_client(REDIS_CONFIG.clone())?;
+
+        // A named pooled connection blocked in BLPOP, as a stopped worker leaves it.
+        let named_queue = format!("{name}:named");
+        let blocked_pool = pool.clone();
+        let blocked_queue = named_queue.clone();
+        let blocked = tokio::spawn(async move {
+            let mut connection = blocked_pool.get().await?;
+            let reply: redis::RedisResult<Vec<Vec<u8>>> =
+                connection.blpop(&blocked_queue, 0.0).await;
+            anyhow::Ok(reply)
+        });
+        // An unnamed connection blocked in BLPOP belongs to someone else.
+        let other_queue = format!("{name}:other");
+        let mut other = client
+            .get_multiplexed_async_connection_with_config(
+                &redis::AsyncConnectionConfig::new().set_response_timeout(None),
+            )
+            .await?;
+        let other_wait = {
+            let other_queue = other_queue.clone();
+            tokio::spawn(async move {
+                let reply: redis::RedisResult<Vec<Vec<u8>>> = other.blpop(&other_queue, 0.0).await;
+                reply
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        assert_eq!(kill_blocked_clients(&client, &name).await?, 1);
+        let reply = tokio::time::timeout(Duration::from_secs(5), blocked).await???;
+        assert!(reply.is_err(), "the killed BLPOP must end with an error");
+
+        // The other client's BLPOP is still waiting; release it by pushing.
+        assert!(!other_wait.is_finished());
+        let mut pusher = client.get_multiplexed_async_connection().await?;
+        let _: () = pusher.rpush(&other_queue, b"done".to_vec()).await?;
+        let reply = tokio::time::timeout(Duration::from_secs(5), other_wait).await??;
+        assert_eq!(reply?.len(), 2);
+
+        // The pool replaces the killed connection when it is checked out again.
+        for _ in 0..2 {
+            let mut connection = tokio::time::timeout(Duration::from_secs(5), pool.get()).await??;
+            let pong: String = redis::cmd("PING").query_async(&mut *connection).await?;
+            assert_eq!(pong, "PONG");
+        }
+        let _: () = pusher.del(&[&named_queue, &other_queue]).await?;
         Ok(())
     }
 }
