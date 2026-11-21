@@ -5,12 +5,9 @@
 /// non-backslash character is the only one accepted by both databases.
 pub const LIKE_ESCAPE_CHAR: char = '!';
 
-/// `ESCAPE` clause matching [`LIKE_ESCAPE_CHAR`].
-pub const LIKE_ESCAPE_CLAUSE: &str = "ESCAPE '!'";
-
 /// Build a `<column> LIKE ? ESCAPE '!'` predicate for patterns built by [`escape_like_pattern`].
 ///
-/// `column` is embedded verbatim, so it must be a fixed identifier, never user input.
+/// `column` is embedded verbatim; requiring `&'static str` keeps user input out of it.
 ///
 /// # Examples
 ///
@@ -19,13 +16,13 @@ pub const LIKE_ESCAPE_CLAUSE: &str = "ESCAPE '!'";
 ///
 /// assert_eq!(like_clause("name"), "name LIKE ? ESCAPE '!'");
 /// ```
-pub fn like_clause(column: &str) -> String {
-    format!("{column} LIKE ? {LIKE_ESCAPE_CLAUSE}")
+pub fn like_clause(column: &'static str) -> String {
+    format!("{column} LIKE ? ESCAPE '{LIKE_ESCAPE_CHAR}'")
 }
 
 /// Escape LIKE wildcards (`%`, `_`) and the escape character itself with [`LIKE_ESCAPE_CHAR`].
 ///
-/// The query must declare the escape character with [`like_clause`] or [`LIKE_ESCAPE_CLAUSE`].
+/// The query must declare the escape character, e.g. with [`like_clause`].
 ///
 /// # Examples
 ///
@@ -92,8 +89,7 @@ mod tests {
     }
 
     #[test]
-    fn test_clause_uses_escape_char() {
-        assert_eq!(LIKE_ESCAPE_CLAUSE, format!("ESCAPE '{LIKE_ESCAPE_CHAR}'"));
+    fn test_like_clause() {
         assert_eq!(like_clause("name"), "name LIKE ? ESCAPE '!'");
     }
 }
